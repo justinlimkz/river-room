@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   applyAction,
   cardLabel,
+  CLOCKWISE_SEATS,
   createSession,
   evaluateHand,
   legalBounds,
@@ -42,16 +43,22 @@ test("hand evaluator recognizes wheel, full house, and flush ordering", () => {
 test("button and named positions rotate every hand", () => {
   const first = createSession();
   const second = startHand({ ...first, status: "handOver" });
-  assert.equal(second.dealer, (first.dealer + 1) % 6);
+  const firstDealerIndex = CLOCKWISE_SEATS.indexOf(first.dealer as (typeof CLOCKWISE_SEATS)[number]);
+  assert.equal(second.dealer, CLOCKWISE_SEATS[(firstDealerIndex + 1) % 6]);
   assert.equal(second.players[second.dealer].position, "BTN");
-  assert.equal(second.players[(second.dealer + 1) % 6].position, "SB");
-  assert.equal(second.players[(second.dealer + 2) % 6].position, "BB");
+  const dealerIndex = CLOCKWISE_SEATS.indexOf(second.dealer as (typeof CLOCKWISE_SEATS)[number]);
+  assert.equal(second.players[CLOCKWISE_SEATS[(dealerIndex + 1) % 6]].position, "SB");
+  assert.equal(second.players[CLOCKWISE_SEATS[(dealerIndex + 2) % 6]].position, "BB");
+  assert.deepEqual(
+    Array.from({ length: 6 }, (_, offset) => second.players[CLOCKWISE_SEATS[(dealerIndex + offset) % 6]].position),
+    ["BTN", "SB", "BB", "UTG", "HJ", "CO"],
+  );
 });
 
 test("folding around awards the blinds without losing chips", () => {
   let state = createSession();
   const totalBefore = state.players.reduce((sum, player) => sum + player.stack, 0) + state.players.reduce((sum, player) => sum + player.committed, 0);
-  for (const seat of [3, 4, 5, 0, 1]) state = applyAction(state, seat, { type: "fold" });
+  for (const seat of [3, 5, 4, 0, 1]) state = applyAction(state, seat, { type: "fold" });
   assert.equal(state.status, "handOver");
   assert.match(state.result, /wins \$3 uncontested/);
   const totalAfter = state.players.reduce((sum, player) => sum + player.stack, 0) + state.players.reduce((sum, player) => sum + player.committed, 0);

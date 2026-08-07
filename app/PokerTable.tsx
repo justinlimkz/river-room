@@ -19,7 +19,7 @@ import {
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v1";
+const STORAGE_KEY = "riverroom-session-v2";
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 

@@ -44,7 +44,7 @@ export type ReviewItem = {
 };
 
 export type HandState = {
-  version: 1;
+  version: 2;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -72,6 +72,9 @@ const RANKS: Rank[] = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K
 const SUITS: Suit[] = ["clubs", "diamonds", "hearts", "spades"];
 const VALUES: Record<Rank, number> = { "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, T: 10, J: 11, Q: 12, K: 13, A: 14 };
 const POSITIONS: Position[] = ["BTN", "SB", "BB", "UTG", "HJ", "CO"];
+// Seat indices follow component layout, not numeric clockwise order:
+// top-left → top-center → top-right → right → hero → left.
+export const CLOCKWISE_SEATS = [0, 1, 2, 3, 5, 4] as const;
 const NAMES = ["Mara", "Theo", "June", "Silas", "Niko", "You"];
 const PROFILES: BotProfile[] = ["balanced", "tag", "lag", "nit", "caller", "balanced"];
 
@@ -133,11 +136,24 @@ function baseSeat(index: number): Seat {
 }
 
 function nextSeat(start: number, predicate: (seat: number) => boolean) {
+  const startPosition = CLOCKWISE_SEATS.indexOf(start as (typeof CLOCKWISE_SEATS)[number]);
   for (let step = 1; step <= 6; step += 1) {
-    const candidate = (start + step) % 6;
+    const candidate = CLOCKWISE_SEATS[(startPosition + step) % 6];
     if (predicate(candidate)) return candidate;
   }
   return -1;
+}
+
+function clockwiseSeat(start: number, steps = 1) {
+  const startPosition = CLOCKWISE_SEATS.indexOf(start as (typeof CLOCKWISE_SEATS)[number]);
+  return CLOCKWISE_SEATS[(startPosition + steps) % 6];
+}
+
+function clockwiseDistance(start: number, target: number) {
+  const from = CLOCKWISE_SEATS.indexOf(start as (typeof CLOCKWISE_SEATS)[number]);
+  const to = CLOCKWISE_SEATS.indexOf(target as (typeof CLOCKWISE_SEATS)[number]);
+  const distance = (to - from + 6) % 6;
+  return distance === 0 ? 6 : distance;
 }
 
 function pay(player: Seat, amount: number) {
@@ -151,9 +167,9 @@ function pay(player: Seat, amount: number) {
 
 export function createSession(): HandState {
   return startHand({
-    version: 1,
+    version: 2,
     handNumber: 0,
-    dealer: 5,
+    dealer: 4,
     street: "preflop",
     deck: [],
     board: [],
@@ -188,23 +204,25 @@ export function startHand(previous: HandState): HandState {
   }));
   if (players[humanSeat].stack <= 0) return { ...previous, players, status: "busted", result: "Your stack is gone. Review the session, then reset when you’re ready." };
 
-  const dealer = (previous.dealer + 1) % 6;
+  const dealer = clockwiseSeat(previous.dealer);
+  const dealerPosition = CLOCKWISE_SEATS.indexOf(dealer as (typeof CLOCKWISE_SEATS)[number]);
   players.forEach((player, index) => {
-    const offset = (index - dealer + 6) % 6;
+    const seatPosition = CLOCKWISE_SEATS.indexOf(index as (typeof CLOCKWISE_SEATS)[number]);
+    const offset = (seatPosition - dealerPosition + 6) % 6;
     player.position = POSITIONS[offset];
   });
   const deck = shuffledDeck();
   const dealOrder: number[] = [];
   let cursor = dealer;
   for (let count = 0; count < 6; count += 1) {
-    cursor = (cursor + 1) % 6;
+    cursor = clockwiseSeat(cursor);
     dealOrder.push(cursor);
   }
   for (let round = 0; round < 2; round += 1) {
     dealOrder.forEach((seat) => players[seat].hole.push(deck.pop()!));
   }
-  const sb = (dealer + 1) % 6;
-  const bb = (dealer + 2) % 6;
+  const sb = clockwiseSeat(dealer);
+  const bb = clockwiseSeat(dealer, 2);
   pay(players[sb], 1);
   pay(players[bb], 2);
   players[sb].lastAction = "SB $1";
@@ -428,7 +446,7 @@ function showdown(state: HandState): HandState {
     const winners = ranked.filter((item) => compareScores(item.result.score, best.result.score) === 0);
     const share = Math.floor(amount / winners.length);
     let odd = amount - share * winners.length;
-    const clockwise = [...winners].sort((a, b) => ((a.player.position === "SB" ? 0 : POSITIONS.indexOf(a.player.position) + 6) - (b.player.position === "SB" ? 0 : POSITIONS.indexOf(b.player.position) + 6)));
+    const clockwise = [...winners].sort((a, b) => clockwiseDistance(state.dealer, state.players.indexOf(a.player)) - clockwiseDistance(state.dealer, state.players.indexOf(b.player)));
     clockwise.forEach(({ player }) => {
       awards.set(state.players.indexOf(player), (awards.get(state.players.indexOf(player)) ?? 0) + share + (odd-- > 0 ? 1 : 0));
     });
@@ -558,5 +576,5 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 1 && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
+  return candidate.version === 2 && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
 }
