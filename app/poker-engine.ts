@@ -44,7 +44,7 @@ export type ReviewItem = {
 };
 
 export type HandState = {
-  version: 3;
+  version: 4;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -53,6 +53,7 @@ export type HandState = {
   players: Seat[];
   currentBet: number;
   minRaise: number;
+  raiseCount: number;
   currentActor: number;
   status: "playing" | "handOver" | "busted";
   history: string[];
@@ -165,9 +166,9 @@ function pay(player: Seat, amount: number) {
   return paid;
 }
 
-export function createSession(): HandState {
+export function createSession(random: () => number = cryptoRandom): HandState {
   return startHand({
-    version: 3,
+    version: 4,
     handNumber: 0,
     dealer: 4,
     street: "preflop",
@@ -176,6 +177,7 @@ export function createSession(): HandState {
     players: Array.from({ length: 6 }, (_, index) => baseSeat(index)),
     currentBet: 0,
     minRaise: 2,
+    raiseCount: 0,
     currentActor: -1,
     status: "handOver",
     history: [],
@@ -183,10 +185,10 @@ export function createSession(): HandState {
     result: "",
     sessionStart: 200,
     sessionHands: 0,
-  });
+  }, random);
 }
 
-export function startHand(previous: HandState): HandState {
+export function startHand(previous: HandState, random: () => number = cryptoRandom): HandState {
   const players = previous.players.map((old, index) => ({
     ...old,
     stack: index !== humanSeat && old.stack <= 0 ? 200 : old.stack,
@@ -211,7 +213,7 @@ export function startHand(previous: HandState): HandState {
     const offset = (seatPosition - dealerPosition + 6) % 6;
     player.position = POSITIONS[offset];
   });
-  const deck = shuffledDeck();
+  const deck = shuffledDeck(random);
   const dealOrder: number[] = [];
   let cursor = dealer;
   for (let count = 0; count < 6; count += 1) {
@@ -237,6 +239,7 @@ export function startHand(previous: HandState): HandState {
     players,
     currentBet: 2,
     minRaise: 2,
+    raiseCount: 0,
     currentActor: clockwiseSeat(bb),
     status: "playing",
     history: [`Hand #${previous.handNumber + 1} · $1/$2 No-Limit Hold’em`],
@@ -304,6 +307,7 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
     if (target > state.currentBet) state.currentBet = target;
     if (fullRaise) {
       state.minRaise = raiseSize;
+      state.raiseCount += 1;
       state.players.forEach((other, index) => {
         if (index !== seatIndex && !other.folded && !other.allIn) {
           other.acted = false;
@@ -366,6 +370,7 @@ function advanceStreet(state: HandState): HandState {
   });
   state.currentBet = 0;
   state.minRaise = 2;
+  state.raiseCount = 0;
   state.deck.pop(); // One burn card before every community-card street.
   const count = state.street === "flop" ? 3 : 1;
   for (let card = 0; card < count; card += 1) state.board.push(state.deck.pop()!);
@@ -466,23 +471,49 @@ function showdown(state: HandState): HandState {
   return state;
 }
 
-function preflopStrength(cards: Card[], position: Position) {
-  const [a, b] = cards.map((card) => VALUES[card.rank]).sort((x, y) => y - x);
-  let score = (a + b) / 28;
-  if (a === b) score = 0.48 + a / 28;
-  if (cards[0].suit === cards[1].suit) score += 0.06;
-  if (Math.abs(a - b) <= 2) score += 0.04;
-  if (["BTN", "CO"].includes(position)) score += 0.08;
-  if (position === "HJ") score += 0.04;
-  return Math.min(1, score);
+function preflopRawScore(cards: Card[]) {
+  const [high, low] = cards.map((card) => VALUES[card.rank]).sort((a, b) => b - a);
+  if (high === low) return 70 + high * 4;
+  const gap = high - low;
+  let score = high * 4 + low * 2;
+  if (cards[0].suit === cards[1].suit) score += 8;
+  if (gap === 1) score += 6;
+  else if (gap === 2) score += 3;
+  else if (gap === 3) score += 1;
+  else if (gap >= 5) score -= (gap - 4) * 2;
+  if (high >= 11 && low >= 10) score += 4;
+  if (high === 14) score += low <= 5 ? 7 : 2;
+  return score;
 }
 
-export function estimateEquity(hole: Card[], board: Card[], opponents: number, iterations = 70) {
+const PREFLOP_PERCENTILES = (() => {
+  const deck = makeDeck();
+  const scores: number[] = [];
+  for (let first = 0; first < deck.length - 1; first += 1) {
+    for (let second = first + 1; second < deck.length; second += 1) scores.push(preflopRawScore([deck[first], deck[second]]));
+  }
+  scores.sort((a, b) => a - b);
+  const percentiles = new Map<number, number>();
+  for (let start = 0; start < scores.length;) {
+    let end = start + 1;
+    while (end < scores.length && scores[end] === scores[start]) end += 1;
+    percentiles.set(scores[start], (start + (end - start) / 2) / scores.length);
+    start = end;
+  }
+  return percentiles;
+})();
+
+export function preflopStrength(cards: Card[]) {
+  if (cards.length !== 2) return 0;
+  return PREFLOP_PERCENTILES.get(preflopRawScore(cards)) ?? 0;
+}
+
+export function estimateEquity(hole: Card[], board: Card[], opponents: number, iterations = 70, random: () => number = Math.random) {
   if (hole.length !== 2) return 0;
   const known = new Set([...hole, ...board].map(cardLabel));
   let wins = 0;
   for (let run = 0; run < iterations; run += 1) {
-    const available = shuffledDeck(Math.random).filter((card) => !known.has(cardLabel(card)));
+    const available = shuffledDeck(random).filter((card) => !known.has(cardLabel(card)));
     const rivalHands: Card[][] = [];
     for (let rival = 0; rival < opponents; rival += 1) rivalHands.push([available.pop()!, available.pop()!]);
     const completed = [...board];
@@ -499,14 +530,47 @@ export function estimateEquity(hole: Card[], board: Card[], opponents: number, i
 }
 
 const PROFILE = {
-  balanced: { enter: 0.54, aggression: 0.62, bluff: 0.09 },
-  tag: { enter: 0.61, aggression: 0.7, bluff: 0.07 },
-  lag: { enter: 0.44, aggression: 0.78, bluff: 0.17 },
-  nit: { enter: 0.69, aggression: 0.48, bluff: 0.03 },
-  caller: { enter: 0.46, aggression: 0.28, bluff: 0.04 },
+  balanced: { openFactor: 1, openRaise: 0.97, continueVsOpen: 0.17, threeBet: 0.075, defendVsThreeBet: 0.075, fourBet: 0.025, continueVsFourBet: 0.021, stackOff: 0.014, preflopAggression: 0.9, postflopAggression: 0.62, postflopContinue: 0.46, betThreshold: 0.58, raiseThreshold: 0.79, bluff: 0.075, callBias: 0 },
+  tag: { openFactor: 0.88, openRaise: 0.98, continueVsOpen: 0.14, threeBet: 0.07, defendVsThreeBet: 0.062, fourBet: 0.026, continueVsFourBet: 0.02, stackOff: 0.015, preflopAggression: 0.94, postflopAggression: 0.68, postflopContinue: 0.49, betThreshold: 0.56, raiseThreshold: 0.77, bluff: 0.055, callBias: -0.015 },
+  lag: { openFactor: 1.25, openRaise: 0.98, continueVsOpen: 0.23, threeBet: 0.115, defendVsThreeBet: 0.105, fourBet: 0.04, continueVsFourBet: 0.033, stackOff: 0.021, preflopAggression: 0.96, postflopAggression: 0.76, postflopContinue: 0.43, betThreshold: 0.52, raiseThreshold: 0.74, bluff: 0.11, callBias: 0.005 },
+  nit: { openFactor: 0.64, openRaise: 0.97, continueVsOpen: 0.09, threeBet: 0.042, defendVsThreeBet: 0.043, fourBet: 0.017, continueVsFourBet: 0.014, stackOff: 0.01, preflopAggression: 0.9, postflopAggression: 0.46, postflopContinue: 0.53, betThreshold: 0.61, raiseThreshold: 0.82, bluff: 0.025, callBias: -0.035 },
+  caller: { openFactor: 1.28, openRaise: 0.3, continueVsOpen: 0.29, threeBet: 0.028, defendVsThreeBet: 0.13, fourBet: 0.012, continueVsFourBet: 0.028, stackOff: 0.009, preflopAggression: 0.58, postflopAggression: 0.27, postflopContinue: 0.43, betThreshold: 0.68, raiseThreshold: 0.86, bluff: 0.025, callBias: 0.06 },
 };
 
-export function decideBot(state: HandState, seatIndex: number): PokerAction {
+const POSITION_OPEN_RATE: Record<Position, number> = { UTG: 0.18, HJ: 0.23, CO: 0.3, BTN: 0.44, SB: 0.4, BB: 0.34 };
+
+function bluffCandidate(cards: Card[]) {
+  const values = cards.map((card) => VALUES[card.rank]).sort((a, b) => b - a);
+  const suited = cards[0].suit === cards[1].suit;
+  return (suited && values[0] === 14 && values[1] <= 5) || (suited && values[0] >= 11 && values[1] >= 9);
+}
+
+function preflopRaiseAction(state: HandState, seatIndex: number): PokerAction {
+  const player = state.players[seatIndex];
+  const bounds = legalBounds(state, seatIndex);
+  if (state.raiseCount >= 3) return { type: "all-in" };
+  const inPosition = ["BTN", "CO"].includes(player.position);
+  const limpers = state.players.filter((other, index) => index !== seatIndex && other.voluntaryPreflop && !other.raisedPreflop && !other.folded).length;
+  let target: number;
+  if (state.raiseCount === 0) target = (player.position === "SB" ? 6 : 5) + limpers * 2;
+  else if (state.raiseCount === 1) target = Math.round(state.currentBet * (inPosition ? 3.2 : 3.8) + limpers * state.currentBet);
+  else target = Math.round(state.currentBet * (inPosition ? 2.3 : 2.5));
+  target = Math.min(bounds.max, Math.max(bounds.min, target));
+  return target === bounds.max ? { type: "all-in" } : { type: "raise", amount: target };
+}
+
+function boardWetness(board: Card[]) {
+  if (board.length < 3) return 0.5;
+  const suitCounts = new Map<Suit, number>();
+  board.forEach((card) => suitCounts.set(card.suit, (suitCounts.get(card.suit) ?? 0) + 1));
+  const suitedness = Math.max(...suitCounts.values()) >= 3 ? 0.35 : Math.max(...suitCounts.values()) === 2 ? 0.18 : 0;
+  const values = [...new Set(board.map((card) => VALUES[card.rank]))].sort((a, b) => a - b);
+  const connected = values.some((value, index) => index > 0 && value - values[index - 1] <= 2) ? 0.3 : 0;
+  const paired = values.length < board.length ? -0.12 : 0;
+  return Math.max(0, Math.min(1, 0.25 + suitedness + connected + paired));
+}
+
+export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
   const player = state.players[seatIndex];
   const view: PublicGameView = {
     street: state.street,
@@ -519,25 +583,60 @@ export function decideBot(state: HandState, seatIndex: number): PokerAction {
   };
   const bounds = legalBounds(state, seatIndex);
   const style = PROFILE[player.profile];
-  const random = Math.random();
   let strength = state.street === "preflop"
-    ? preflopStrength(player.hole, player.position)
-    : estimateEquity(player.hole, view.board, Math.max(1, view.activePlayers - 1), 54);
-  strength += (Math.random() - 0.5) * 0.08;
+    ? preflopStrength(player.hole)
+    : estimateEquity(player.hole, view.board, Math.max(1, view.activePlayers - 1), 54, random);
+  if (state.street !== "preflop") {
+    const opponents = state.players.filter((other, index) => index !== seatIndex && !other.folded);
+    const rangePressure = opponents.reduce((sum, opponent) => sum + (opponent.raisedPreflop ? 0.09 : opponent.voluntaryPreflop ? 0.04 : 0), 0) / Math.max(1, opponents.length);
+    strength -= rangePressure;
+  }
+  strength = Math.max(0, Math.min(1, strength + (random() - 0.5) * 0.035));
   const potOdds = bounds.toCall / Math.max(1, view.pot + bounds.toCall);
 
   if (state.street === "preflop") {
-    if (strength < style.enter && bounds.toCall > 0 && random > style.bluff) return { type: "fold" };
-    if (bounds.canRaise && (strength > style.enter + 0.14 || random < style.bluff) && Math.random() < style.aggression) {
-      return { type: "raise", amount: Math.min(bounds.max, Math.max(bounds.min, state.currentBet ? state.currentBet + state.minRaise : 5)) };
+    if (state.raiseCount === 0) {
+      const openRate = Math.min(0.58, POSITION_OPEN_RATE[player.position] * style.openFactor);
+      if (strength < 1 - openRate) return bounds.toCall > 0 ? { type: "fold" } : { type: "check" };
+      if (bounds.canRaise && random() < style.openRaise) return preflopRaiseAction(state, seatIndex);
+      return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
     }
-    return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+
+    if (state.raiseCount === 1) {
+      const canThreeBet = strength >= 1 - style.threeBet || (bluffCandidate(player.hole) && random() < style.bluff);
+      if (bounds.canRaise && canThreeBet && random() < style.preflopAggression) return preflopRaiseAction(state, seatIndex);
+      if (strength >= 1 - style.continueVsOpen) return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+      return bounds.toCall > 0 ? { type: "fold" } : { type: "check" };
+    }
+
+    if (state.raiseCount === 2) {
+      const canFourBet = strength >= 1 - style.fourBet || (bluffCandidate(player.hole) && random() < style.bluff * 0.45);
+      if (bounds.canRaise && canFourBet && random() < style.preflopAggression) return preflopRaiseAction(state, seatIndex);
+      if (strength >= 1 - style.defendVsThreeBet) return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+      return bounds.toCall > 0 ? { type: "fold" } : { type: "check" };
+    }
+
+    if (state.raiseCount === 3) {
+      if (bounds.canRaise && strength >= 1 - style.stackOff) return { type: "all-in" };
+      if (strength >= 1 - style.continueVsFourBet && bounds.toCall <= player.stack * 0.35) return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+      return bounds.toCall > 0 ? { type: "fold" } : { type: "check" };
+    }
+
+    if (strength >= 1 - style.stackOff) return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+    return bounds.toCall > 0 ? { type: "fold" } : { type: "check" };
   }
 
-  if (bounds.toCall > 0 && strength + (player.profile === "caller" ? 0.1 : 0) < potOdds + 0.08 && random > style.bluff) return { type: "fold" };
-  if (bounds.canRaise && (strength > 0.62 || random < style.bluff) && Math.random() < style.aggression) {
-    const target = Math.min(bounds.max, Math.max(bounds.min, state.currentBet + Math.max(state.minRaise, Math.round(view.pot * (strength > 0.78 ? 0.85 : 0.55)))));
-    if (target === bounds.max && player.stack <= view.pot * 0.7) return { type: "all-in" };
+  const headsUp = view.activePlayers === 2;
+  const spr = player.stack / Math.max(1, view.pot);
+  const bluffChance = style.bluff * (headsUp ? 1 : 0.45) * (spr < 0.7 ? 0.45 : 1);
+  const continueThreshold = style.postflopContinue + (headsUp ? 0 : 0.035) + (state.street === "river" ? 0.015 : 0);
+  if (bounds.toCall > 0 && strength + style.callBias < Math.max(potOdds + 0.055, continueThreshold) && random() > bluffChance) return { type: "fold" };
+  const valueThreshold = (bounds.toCall > 0 ? style.raiseThreshold : style.betThreshold) + (headsUp ? 0 : 0.055);
+  if (bounds.canRaise && (strength > valueThreshold || random() < bluffChance) && random() < style.postflopAggression) {
+    const wetness = boardWetness(view.board);
+    const fraction = strength > 0.8 ? (wetness > 0.55 ? 0.82 : 0.68) : (wetness > 0.55 ? 0.62 : 0.42);
+    const target = Math.min(bounds.max, Math.max(bounds.min, state.currentBet + Math.max(state.minRaise, Math.round(view.pot * fraction))));
+    if (target === bounds.max && (spr <= 0.75 || strength > 0.84)) return { type: "all-in" };
     return { type: "raise", amount: target };
   }
   return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
@@ -548,7 +647,7 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const toCall = toCallFor(state, humanSeat);
   const pot = potTotal(state);
   const opponents = Math.max(1, activePlayers(state).length - 1);
-  const equity = state.street === "preflop" ? preflopStrength(player.hole, player.position) : estimateEquity(player.hole, state.board, opponents, 110);
+  const equity = state.street === "preflop" ? preflopStrength(player.hole) : estimateEquity(player.hole, state.board, opponents, 110);
   const potOdds = toCall / Math.max(1, pot + toCall);
   const strong = equity > Math.max(0.56, potOdds + 0.18);
   const weak = equity < potOdds - 0.03;
@@ -580,5 +679,5 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 3 && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
+  return candidate.version === 4 && typeof candidate.raiseCount === "number" && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
 }

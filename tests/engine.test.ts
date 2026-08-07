@@ -5,12 +5,17 @@ import {
   cardLabel,
   CLOCKWISE_SEATS,
   createSession,
+  decideBot,
   evaluateHand,
   legalBounds,
+  potTotal,
   seededRandom,
   shuffledDeck,
   startHand,
+  toCallFor,
+  type BotProfile,
   type Card,
+  type Position,
 } from "../app/poker-engine";
 
 const card = (rank: Card["rank"], suit: Card["suit"]): Card => ({ rank, suit });
@@ -238,4 +243,132 @@ test("an odd chip in a tied pot goes to the first winner left of the button", ()
   state = applyAction(state, 1, { type: "check" });
   assert.equal(state.players[0].stack, 11);
   assert.equal(state.players[1].stack, 12);
+});
+
+test("bot decisions do not change when forbidden opponent cards change", () => {
+  const state = createSession(seededRandom(91));
+  const actor = state.currentActor;
+  const altered = structuredClone(state);
+  altered.players.forEach((player, index) => {
+    if (index !== actor) player.hole = [card("2", "clubs"), card("3", "diamonds")];
+  });
+  assert.deepEqual(decideBot(state, actor, seededRandom(7)), decideBot(altered, actor, seededRandom(7)));
+});
+
+test("preflop bot populations have distinct realistic frequencies and escalation", () => {
+  const random = seededRandom(20260807);
+  let state = createSession(random);
+  const profiles = new Map<BotProfile, { hands: number; vpip: number; pfr: number; threeBetOpportunities: number; threeBets: number }>();
+  const positions = new Map<Position, { opportunities: number; opens: number }>();
+  const raisesPerHand: number[] = [];
+  const openSizes: number[] = [];
+  const threeBetSizes: number[] = [];
+  const fourBetSizes: number[] = [];
+
+  for (let hand = 0; hand < 6000; hand += 1) {
+    if (hand > 0) {
+      state.status = "handOver";
+      state.players.forEach((player) => { player.stack = 200; });
+      state = startHand(state, random);
+    }
+    let raises = 0;
+    let actions = 0;
+    while (state.status === "playing" && state.street === "preflop" && actions++ < 30) {
+      const actor = state.currentActor;
+      const player = state.players[actor];
+      const level = state.raiseCount;
+      const action = decideBot(state, actor, random);
+      const metrics = profiles.get(player.profile) ?? { hands: 0, vpip: 0, pfr: 0, threeBetOpportunities: 0, threeBets: 0 };
+      profiles.set(player.profile, metrics);
+      if (level === 0) {
+        const position = positions.get(player.position) ?? { opportunities: 0, opens: 0 };
+        position.opportunities += 1;
+        if (action.type === "raise" || action.type === "all-in") position.opens += 1;
+        positions.set(player.position, position);
+      }
+      if (level === 1) {
+        metrics.threeBetOpportunities += 1;
+        if (action.type === "raise" || action.type === "all-in") metrics.threeBets += 1;
+      }
+      if (action.type === "raise" || action.type === "all-in") {
+        raises += 1;
+        const target = action.type === "all-in" ? player.streetBet + player.stack : action.amount!;
+        if (level === 0) openSizes.push(target);
+        if (level === 1) threeBetSizes.push(target);
+        if (level === 2) fourBetSizes.push(target);
+      }
+      state = applyAction(state, actor, action);
+    }
+    assert.ok(actions < 30, "preflop action should resolve without a raise loop");
+    raisesPerHand.push(raises);
+    state.players.forEach((player) => {
+      const metrics = profiles.get(player.profile) ?? { hands: 0, vpip: 0, pfr: 0, threeBetOpportunities: 0, threeBets: 0 };
+      metrics.hands += 1;
+      if (player.voluntaryPreflop) metrics.vpip += 1;
+      if (player.raisedPreflop) metrics.pfr += 1;
+      profiles.set(player.profile, metrics);
+    });
+  }
+
+  const rate = (profile: BotProfile, key: "vpip" | "pfr") => profiles.get(profile)![key] / profiles.get(profile)!.hands;
+  const threeBetRate = (profile: BotProfile) => profiles.get(profile)!.threeBets / profiles.get(profile)!.threeBetOpportunities;
+  const average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+  assert.ok(rate("nit", "vpip") >= 0.09 && rate("nit", "vpip") <= 0.18);
+  assert.ok(rate("tag", "vpip") >= 0.16 && rate("tag", "vpip") <= 0.25);
+  assert.ok(rate("balanced", "vpip") >= 0.19 && rate("balanced", "vpip") <= 0.29);
+  assert.ok(rate("lag", "vpip") >= 0.25 && rate("lag", "vpip") <= 0.37);
+  assert.ok(rate("caller", "vpip") >= 0.26 && rate("caller", "vpip") <= 0.39);
+  assert.ok(rate("caller", "pfr") < rate("nit", "pfr"));
+  assert.ok(rate("nit", "pfr") < rate("balanced", "pfr"));
+  assert.ok(rate("balanced", "pfr") < rate("lag", "pfr"));
+  assert.ok(threeBetRate("caller") < threeBetRate("balanced"));
+  assert.ok(threeBetRate("balanced") < threeBetRate("lag"));
+  assert.ok(positions.get("BTN")!.opens / positions.get("BTN")!.opportunities > positions.get("UTG")!.opens / positions.get("UTG")!.opportunities + 0.12);
+  assert.ok(average(raisesPerHand) >= 0.75 && average(raisesPerHand) <= 1.25);
+  assert.ok(Math.max(...raisesPerHand) <= 4);
+  assert.ok(average(openSizes) >= 4.5 && average(openSizes) <= 7);
+  assert.ok(average(threeBetSizes) >= 14 && average(threeBetSizes) <= 28);
+  assert.ok(average(fourBetSizes) >= 34 && average(fourBetSizes) <= 65);
+});
+
+test("postflop profiles separate calling, folding, and aggression without extremes", () => {
+  const random = seededRandom(7701);
+  let state = createSession(random);
+  const metrics = new Map<BotProfile, { actions: number; facing: number; folds: number; aggressive: number }>();
+  for (let hand = 0; hand < 700; hand += 1) {
+    if (hand > 0) {
+      state.status = "handOver";
+      state.players.forEach((player) => { player.stack = 200; });
+      state = startHand(state, random);
+    }
+    let actions = 0;
+    while (state.status === "playing" && actions++ < 100) {
+      const actor = state.currentActor;
+      const player = state.players[actor];
+      const action = decideBot(state, actor, random);
+      if (state.street !== "preflop") {
+        const profile = metrics.get(player.profile) ?? { actions: 0, facing: 0, folds: 0, aggressive: 0 };
+        profile.actions += 1;
+        if (toCallFor(state, actor) > 0) {
+          profile.facing += 1;
+          if (action.type === "fold") profile.folds += 1;
+        }
+        if (action.type === "raise" || action.type === "all-in") profile.aggressive += 1;
+        metrics.set(player.profile, profile);
+      }
+      const chips = state.players.reduce((sum, participant) => sum + participant.stack, 0) + potTotal(state);
+      state = applyAction(state, actor, action);
+      assert.equal(state.players.reduce((sum, participant) => sum + participant.stack, 0) + potTotal(state), chips);
+    }
+    assert.ok(actions < 100, "postflop action should resolve");
+  }
+  const aggression = (profile: BotProfile) => metrics.get(profile)!.aggressive / metrics.get(profile)!.actions;
+  const foldRate = (profile: BotProfile) => metrics.get(profile)!.folds / metrics.get(profile)!.facing;
+  assert.ok(aggression("caller") < aggression("nit"));
+  assert.ok(aggression("nit") < aggression("balanced"));
+  assert.ok(aggression("balanced") < aggression("lag"));
+  assert.ok(foldRate("caller") < foldRate("balanced"));
+  assert.ok(foldRate("balanced") < foldRate("nit"));
+  assert.ok(foldRate("caller") >= 0.12 && foldRate("caller") <= 0.38);
+  assert.ok(foldRate("nit") >= 0.32 && foldRate("nit") <= 0.62);
 });
