@@ -20,8 +20,8 @@ import {
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v5";
-const LEGACY_STORAGE_KEY = "riverroom-session-v4";
+const STORAGE_KEY = "riverroom-session-v6";
+const LEGACY_STORAGE_KEYS = ["riverroom-session-v5", "riverroom-session-v4"];
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 
@@ -89,6 +89,32 @@ function ReviewPanel({ state, onClose }: { state: HandState; onClose: () => void
   );
 }
 
+const percent = (count: number, total: number) => total ? `${Math.round((count / total) * 100)}%` : "—";
+
+function ActionMix({
+  label,
+  values,
+  note,
+}: {
+  label: string;
+  values: { label: string; count: number; tone: string }[];
+  note?: string;
+}) {
+  const total = values.reduce((sum, value) => sum + value.count, 0);
+  return (
+    <section className="action-mix" aria-label={label}>
+      <div className="stat-section-title"><strong>{label}</strong><span>{total} decisions</span></div>
+      <div className="mix-bar" aria-hidden="true">
+        {values.map((value) => value.count > 0 && <i key={value.label} className={value.tone} style={{ width: `${(value.count / total) * 100}%` }} />)}
+      </div>
+      <div className="mix-legend">
+        {values.map((value) => <div key={value.label}><i className={value.tone} /><span>{value.label}</span><b>{percent(value.count, total)}</b></div>)}
+      </div>
+      {note && <small className="stat-note">{note}</small>}
+    </section>
+  );
+}
+
 export default function PokerTable() {
   const [state, setState] = useState<HandState | null>(null);
   const [raiseTo, setRaiseTo] = useState<string | null>(null);
@@ -102,13 +128,13 @@ export default function PokerTable() {
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
+      const saved = localStorage.getItem(STORAGE_KEY) ?? LEGACY_STORAGE_KEYS.map((key) => localStorage.getItem(key)).find(Boolean) ?? null;
       const parsed: unknown = saved ? JSON.parse(saved) : null;
       const restored = isValidSavedState(parsed) ? parsed : migrateSavedState(parsed);
       queueMicrotask(() => setState(restored ?? createSession()));
     } catch {
       localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(LEGACY_STORAGE_KEY);
+      LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
       queueMicrotask(() => setState(createSession()));
     }
   }, []);
@@ -150,7 +176,7 @@ export default function PokerTable() {
 
   const reset = () => {
     localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     setRaiseTo(null);
     setReviewOpen(false);
     setState(createSession());
@@ -158,6 +184,9 @@ export default function PokerTable() {
   const toCall = toCallFor(state, humanSeat);
   const pot = potTotal(state);
   const liveHand = evaluateHand([...state.players[humanSeat].hole, ...state.board]);
+  const heroStats = state.players[humanSeat].stats;
+  const preflopDecisions = heroStats.preflopFolds + heroStats.preflopCalls + heroStats.preflopRaises;
+  const postflopDecisions = heroStats.postflopFolds + heroStats.postflopCalls + heroStats.postflopRaises + heroStats.postflopChecks;
   const quickRaise = (fraction: number) => Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + pot * fraction)));
 
   return (
@@ -225,7 +254,40 @@ export default function PokerTable() {
           <div className="history-list">
             {[...state.history].reverse().map((entry, index) => <div className={index === 0 ? "latest" : ""} key={`${entry}-${index}`}><span>{String(state.history.length - index).padStart(2, "0")}</span><p>{entry}</p></div>)}
           </div>
-          <div className="session-card"><span className="eyebrow">Your session</span><div><strong>${state.players[humanSeat].stack - state.sessionStart >= 0 ? "+" : ""}{state.players[humanSeat].stack - state.sessionStart}</strong><small>NET CHIPS</small></div><div><strong>{state.sessionHands}</strong><small>HANDS</small></div></div>
+          <section className="session-dashboard" aria-label="Your session statistics">
+            <div className="session-heading"><span className="eyebrow">Your session</span><small>Since last reset</small></div>
+            <div className="session-summary">
+              <div><strong>${state.players[humanSeat].stack - state.sessionStart >= 0 ? "+" : ""}{state.players[humanSeat].stack - state.sessionStart}</strong><small>NET CHIPS</small></div>
+              <div><strong>{state.sessionHands}</strong><small>HANDS</small></div>
+            </div>
+            <div className="stat-grid">
+              <div title={`${heroStats.vpip} of ${heroStats.hands} hands`}><strong>{percent(heroStats.vpip, heroStats.hands)}</strong><small>VPIP</small></div>
+              <div title={`${heroStats.pfr} of ${heroStats.hands} hands`}><strong>{percent(heroStats.pfr, heroStats.hands)}</strong><small>PFR</small></div>
+              <div title={`${heroStats.threeBets} of ${heroStats.threeBetOpportunities} opportunities`}><strong>{percent(heroStats.threeBets, heroStats.threeBetOpportunities)}</strong><small>3-BET</small></div>
+              <div title={`${heroStats.flopsSeen} of ${heroStats.hands} hands`}><strong>{percent(heroStats.flopsSeen, heroStats.hands)}</strong><small>SAW FLOP</small></div>
+              <div title={`${heroStats.handsWon} of ${heroStats.hands} hands`}><strong>{percent(heroStats.handsWon, heroStats.hands)}</strong><small>HANDS WON</small></div>
+              <div title={`${heroStats.showdownWins} of ${heroStats.showdowns} showdowns`}><strong>{percent(heroStats.showdownWins, heroStats.showdowns)}</strong><small>W$SD</small></div>
+            </div>
+            <ActionMix
+              label="Preflop mix"
+              values={[
+                { label: "Fold", count: heroStats.preflopFolds, tone: "fold-tone" },
+                { label: "Call", count: heroStats.preflopCalls, tone: "call-tone" },
+                { label: "Raise", count: heroStats.preflopRaises, tone: "raise-tone" },
+              ]}
+              note={`${preflopDecisions} voluntary decisions · BB checks excluded`}
+            />
+            <ActionMix
+              label="Postflop mix"
+              values={[
+                { label: "Fold", count: heroStats.postflopFolds, tone: "fold-tone" },
+                { label: "Call", count: heroStats.postflopCalls, tone: "call-tone" },
+                { label: "Raise", count: heroStats.postflopRaises, tone: "raise-tone" },
+                { label: "Check", count: heroStats.postflopChecks, tone: "check-tone" },
+              ]}
+              note={`${postflopDecisions} decisions after the flop`}
+            />
+          </section>
           <p className="privacy-note">Saved on this device. Opponents never see hidden cards.</p>
         </aside>
       </div>

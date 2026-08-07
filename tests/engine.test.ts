@@ -361,10 +361,52 @@ test("legacy saves preserve bankroll and statistics while starting a clean upgra
   const legacy = { ...state, version: 4 };
   const migrated = migrateSavedState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated.version, 5);
+  assert.equal(migrated.version, 6);
   assert.equal(migrated.status, "handOver");
   assert.equal(migrated.players[5].stack, 180);
   assert.equal(migrated.players[5].stats.vpip, 12);
+});
+
+test("session statistics count action mix and 3-bet opportunities", () => {
+  const facingOpen = () => {
+    const state = createSession(seededRandom(63));
+    state.currentActor = 5;
+    state.currentBet = 6;
+    state.minRaise = 4;
+    state.raiseCount = 1;
+    state.preflopRaises = 1;
+    state.preflopOpener = 3;
+    state.players[3].streetBet = 6;
+    return state;
+  };
+
+  const folded = applyAction(facingOpen(), 5, { type: "fold" });
+  assert.equal(folded.players[5].stats.preflopFolds, 1);
+  assert.equal(folded.players[5].stats.threeBetOpportunities, 1);
+
+  const called = applyAction(facingOpen(), 5, { type: "call" });
+  assert.equal(called.players[5].stats.preflopCalls, 1);
+  assert.equal(called.players[5].stats.threeBets, 0);
+
+  const raised = applyAction(facingOpen(), 5, { type: "raise", amount: 20 });
+  assert.equal(raised.players[5].stats.preflopRaises, 1);
+  assert.equal(raised.players[5].stats.threeBetOpportunities, 1);
+  assert.equal(raised.players[5].stats.threeBets, 1);
+});
+
+test("v5 saves gain empty counters without interrupting an active hand", () => {
+  const state = createSession(seededRandom(72));
+  const legacy = structuredClone(state) as unknown as { version: number; players: Array<{ stats: Record<string, number> }> };
+  legacy.version = 5;
+  legacy.players.forEach((player) => {
+    for (const key of ["preflopFolds", "preflopCalls", "preflopRaises", "preflopChecks", "threeBetOpportunities", "threeBets", "postflopFolds", "postflopCalls", "postflopRaises", "postflopChecks", "flopsSeen", "handsWon", "showdowns", "showdownWins"]) delete player.stats[key];
+  });
+  const migrated = migrateSavedState(legacy);
+  assert.ok(migrated);
+  assert.equal(migrated.version, 6);
+  assert.equal(migrated.status, "playing");
+  assert.equal(migrated.currentActor, state.currentActor);
+  assert.equal(migrated.players[5].stats.preflopFolds, 0);
 });
 
 test("preflop bot populations have distinct realistic frequencies and escalation", () => {

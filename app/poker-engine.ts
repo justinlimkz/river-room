@@ -7,7 +7,26 @@ export type ActionKind = "fold" | "check" | "call" | "raise" | "all-in";
 export type BotProfile = "balanced" | "tag" | "lag" | "nit" | "caller";
 
 export type PokerAction = { type: ActionKind; amount?: number };
-export type PlayerStats = { hands: number; vpip: number; pfr: number; aggression: number };
+export type PlayerStats = {
+  hands: number;
+  vpip: number;
+  pfr: number;
+  aggression: number;
+  preflopFolds: number;
+  preflopCalls: number;
+  preflopRaises: number;
+  preflopChecks: number;
+  threeBetOpportunities: number;
+  threeBets: number;
+  postflopFolds: number;
+  postflopCalls: number;
+  postflopRaises: number;
+  postflopChecks: number;
+  flopsSeen: number;
+  handsWon: number;
+  showdowns: number;
+  showdownWins: number;
+};
 export type PublicAction = {
   street: Street;
   seat: number;
@@ -53,7 +72,7 @@ export type ReviewItem = {
 };
 
 export type HandState = {
-  version: 5;
+  version: 6;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -108,6 +127,27 @@ export const CLOCKWISE_SEATS = [0, 1, 2, 3, 5, 4] as const;
 const NAMES = ["Mara", "Theo", "June", "Silas", "Niko", "You"];
 const PROFILES: BotProfile[] = ["balanced", "tag", "lag", "nit", "caller", "balanced"];
 
+const emptyStats = (): PlayerStats => ({
+  hands: 0,
+  vpip: 0,
+  pfr: 0,
+  aggression: 0,
+  preflopFolds: 0,
+  preflopCalls: 0,
+  preflopRaises: 0,
+  preflopChecks: 0,
+  threeBetOpportunities: 0,
+  threeBets: 0,
+  postflopFolds: 0,
+  postflopCalls: 0,
+  postflopRaises: 0,
+  postflopChecks: 0,
+  flopsSeen: 0,
+  handsWon: 0,
+  showdowns: 0,
+  showdownWins: 0,
+});
+
 export const humanSeat = 5;
 export const potTotal = (state: HandState) => state.players.reduce((sum, player) => sum + player.committed, 0);
 export const toCallFor = (state: HandState, seat: number) => Math.max(0, state.currentBet - state.players[seat].streetBet);
@@ -161,7 +201,7 @@ function baseSeat(index: number): Seat {
     raisedPreflop: false,
     lastAction: "",
     position: "UTG",
-    stats: { hands: 0, vpip: 0, pfr: 0, aggression: 0 },
+    stats: emptyStats(),
   };
 }
 
@@ -197,7 +237,7 @@ function pay(player: Seat, amount: number) {
 
 export function createSession(random: () => number = cryptoRandom): HandState {
   return startHand({
-    version: 5,
+    version: 6,
     handNumber: 0,
     dealer: 4,
     street: "preflop",
@@ -316,17 +356,21 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
   const bounds = legalBounds(state, seatIndex);
   const oldCurrentBet = state.currentBet;
   const raiseLevelBefore = state.raiseCount;
+  let recordedKind: "fold" | "check" | "call" | "raise";
 
   if (action.type === "fold") {
+    recordedKind = "fold";
     player.folded = true;
     player.acted = true;
     player.actedAtBet = state.currentBet;
     player.lastAction = "Fold";
   } else if (action.type === "check" && beforeToCall === 0) {
+    recordedKind = "check";
     player.acted = true;
     player.actedAtBet = state.currentBet;
     player.lastAction = "Check";
   } else if (action.type === "call" && beforeToCall > 0) {
+    recordedKind = "call";
     const paid = pay(player, beforeToCall);
     player.acted = true;
     player.actedAtBet = state.currentBet;
@@ -344,6 +388,7 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
     const paid = pay(player, target - player.streetBet);
     const raiseSize = target - oldCurrentBet;
     const fullRaise = target > oldCurrentBet && raiseSize >= state.minRaise;
+    recordedKind = target > oldCurrentBet ? "raise" : "call";
     if (target > state.currentBet) state.currentBet = target;
     if (fullRaise) {
       state.minRaise = raiseSize;
@@ -378,6 +423,16 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
     return input;
   }
 
+  const statsPrefix = state.street === "preflop" ? "preflop" : "postflop";
+  const statsKey = `${statsPrefix}${recordedKind[0].toUpperCase()}${recordedKind.slice(1)}s` as
+    | "preflopFolds" | "preflopChecks" | "preflopCalls" | "preflopRaises"
+    | "postflopFolds" | "postflopChecks" | "postflopCalls" | "postflopRaises";
+  player.stats[statsKey] += 1;
+  if (state.street === "preflop" && raiseLevelBefore === 1 && state.preflopOpener !== seatIndex) {
+    player.stats.threeBetOpportunities += 1;
+    if (recordedKind === "raise" && state.raiseCount > raiseLevelBefore) player.stats.threeBets += 1;
+  }
+
   state.actionLog.push({
     street: state.street,
     seat: seatIndex,
@@ -406,6 +461,7 @@ function awardUncontested(state: HandState) {
   const pot = potTotal(state);
   const profit = pot - winner.committed;
   winner.stack += pot;
+  winner.stats.handsWon += 1;
   state.players.forEach((player) => { player.committed = 0; player.streetBet = 0; });
   state.status = winner.isHuman && winner.stack <= 0 ? "busted" : "handOver";
   state.currentActor = -1;
@@ -418,7 +474,13 @@ function advanceStreet(state: HandState): HandState {
   const streetOrder: Street[] = ["preflop", "flop", "turn", "river"];
   const index = streetOrder.indexOf(state.street);
   if (index === 3) return showdown(state);
+  const leavingPreflop = state.street === "preflop";
   state.street = streetOrder[index + 1];
+  if (leavingPreflop) {
+    state.players.forEach((player) => {
+      if (!player.folded) player.stats.flopsSeen += 1;
+    });
+  }
   state.players.forEach((player) => {
     player.streetBet = 0;
     player.acted = player.folded || player.allIn;
@@ -502,6 +564,7 @@ function showdown(state: HandState): HandState {
   const awards = new Map<number, number>();
   const returns = new Map<number, number>();
   const descriptions = new Set<string>();
+  const showdownWinners = new Set<number>();
   let contestedTotal = 0;
   contributions.forEach((level) => {
     const contributors = state.players.filter((player) => player.committed >= level);
@@ -522,12 +585,21 @@ function showdown(state: HandState): HandState {
     let odd = amount - share * winners.length;
     const clockwise = [...winners].sort((a, b) => clockwiseDistance(state.dealer, state.players.indexOf(a.player)) - clockwiseDistance(state.dealer, state.players.indexOf(b.player)));
     clockwise.forEach(({ player }) => {
-      awards.set(state.players.indexOf(player), (awards.get(state.players.indexOf(player)) ?? 0) + share + (odd-- > 0 ? 1 : 0));
+      const playerIndex = state.players.indexOf(player);
+      awards.set(playerIndex, (awards.get(playerIndex) ?? 0) + share + (odd-- > 0 ? 1 : 0));
+      showdownWinners.add(playerIndex);
     });
     descriptions.add(`${winners.map(({ player }) => player.name).join(" & ")} · ${best.result.name}`);
   });
   awards.forEach((amount, index) => { state.players[index].stack += amount; });
   returns.forEach((amount, index) => { state.players[index].stack += amount; });
+  state.players.forEach((player, index) => {
+    if (!player.folded) player.stats.showdowns += 1;
+    if (showdownWinners.has(index)) {
+      player.stats.showdownWins += 1;
+      player.stats.handsWon += 1;
+    }
+  });
   state.players.forEach((player) => { player.committed = 0; player.streetBet = 0; });
   state.status = state.players[humanSeat].stack <= 0 ? "busted" : "handOver";
   state.currentActor = -1;
@@ -1083,26 +1155,37 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 5 && typeof candidate.raiseCount === "number" && Array.isArray(candidate.actionLog) && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
+  return candidate.version === 6
+    && typeof candidate.raiseCount === "number"
+    && Array.isArray(candidate.actionLog)
+    && Array.isArray(candidate.players)
+    && candidate.players.length === 6
+    && candidate.players.every((player) => typeof player.stats?.preflopFolds === "number")
+    && Array.isArray(candidate.deck)
+    && Array.isArray(candidate.board);
 }
 
 export function migrateSavedState(value: unknown): HandState | null {
   if (isValidSavedState(value)) return value;
   if (!value || typeof value !== "object") return null;
-  const legacy = value as Partial<HandState> & { version?: number };
-  if (legacy.version !== 4 || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
+  const legacy = value as Omit<Partial<HandState>, "version"> & { version?: number };
+  if (![4, 5].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
   const migrated = {
     ...legacy,
-    version: 5,
-    preflopRaises: legacy.street === "preflop" ? legacy.raiseCount ?? 0 : 0,
-    preflopOpener: null,
-    preflopAggressor: null,
-    lastAggressor: null,
-    actionLog: [],
+    version: 6,
+    players: legacy.players.map((player) => ({
+      ...player,
+      stats: { ...emptyStats(), ...player.stats },
+    })),
+    preflopRaises: legacy.preflopRaises ?? (legacy.street === "preflop" ? legacy.raiseCount ?? 0 : 0),
+    preflopOpener: legacy.preflopOpener ?? null,
+    preflopAggressor: legacy.preflopAggressor ?? null,
+    lastAggressor: legacy.lastAggressor ?? null,
+    actionLog: legacy.actionLog ?? [],
   } as HandState;
-  // A legacy in-progress hand lacks the public action sequence required by the
+  // A v4 in-progress hand lacks the public action sequence required by the
   // new range model. Preserve bankroll and statistics, then begin a clean hand.
-  if (migrated.status === "playing") {
+  if (legacy.version === 4 && migrated.status === "playing") {
     migrated.status = "handOver";
     migrated.players.forEach((player) => {
       player.stack += player.committed;
