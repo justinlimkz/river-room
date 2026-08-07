@@ -686,7 +686,8 @@ export function buildBotContext(state: HandState, seatIndex: number): BotDecisio
     ? actions.filter((action) => action.street === "preflop" && action.raiseLevel === 0 && action.type === "call").length
     : 0;
   const opener = state.preflopOpener ?? null;
-  const aggressor = state.lastAggressor ?? (state.street !== "preflop" ? state.preflopAggressor : null);
+  const latestAggressiveAction = [...actions].reverse().find((action) => action.type === "raise" || action.type === "all-in");
+  const aggressor = state.lastAggressor ?? latestAggressiveAction?.seat ?? (state.street !== "preflop" ? state.preflopAggressor : null);
   const effectiveStack = Math.min(
     player.stack + player.streetBet,
     Math.max(0, ...opponents.map((index) => state.players[index].stack + state.players[index].streetBet)),
@@ -741,7 +742,7 @@ function weightedHoleSample(
   return selected.cards;
 }
 
-function opponentRangeWeight(state: HandState, opponentIndex: number, cards: Card[]) {
+function opponentRangeWeightV6(state: HandState, opponentIndex: number, cards: Card[]) {
   const opponent = state.players[opponentIndex];
   const strength = preflopStrength(cards);
   const preflop = (state.actionLog ?? []).filter((action) => action.street === "preflop" && action.seat === opponentIndex);
@@ -768,10 +769,85 @@ function opponentRangeWeight(state: HandState, opponentIndex: number, cards: Car
   return weight;
 }
 
-export function estimateRangeEquity(
+export function estimateRangeEquityV6(
   state: HandState,
   seatIndex: number,
   iterations = 64,
+  random: () => number = Math.random,
+) {
+  const hole = state.players[seatIndex].hole;
+  if (hole.length !== 2) return 0;
+  const context = buildBotContext(state, seatIndex);
+  const known = new Set([...hole, ...state.board].map(cardLabel));
+  let shares = 0;
+  for (let run = 0; run < iterations; run += 1) {
+    const available = shuffledDeck(random).filter((card) => !known.has(cardLabel(card)));
+    const rivals = context.opponents.map((opponent) => weightedHoleSample(
+      available,
+      (cards) => opponentRangeWeightV6(state, opponent, cards),
+      random,
+    ));
+    const completed = [...state.board];
+    while (completed.length < 5) completed.push(available.pop()!);
+    const hero = evaluateHand([...hole, ...completed]).score;
+    const scores = rivals.map((cards) => evaluateHand([...cards, ...completed]).score);
+    if (!scores.some((score) => compareScores(score, hero) > 0)) {
+      shares += 1 / (scores.filter((score) => compareScores(score, hero) === 0).length + 1);
+    }
+  }
+  return shares / iterations;
+}
+
+function boardThroughStreet(board: Card[], street: Street) {
+  const count: Record<Street, number> = { preflop: 0, flop: 3, turn: 4, river: 5 };
+  return board.slice(0, count[street]);
+}
+
+function opponentRangeWeight(state: HandState, opponentIndex: number, cards: Card[]) {
+  const opponent = state.players[opponentIndex];
+  const strength = preflopStrength(cards);
+  const preflop = (state.actionLog ?? []).filter((action) => action.street === "preflop" && action.seat === opponentIndex);
+  const postflop = (state.actionLog ?? []).filter((action) => action.street !== "preflop" && action.seat === opponentIndex);
+  const raises = preflop.filter((action) => action.type === "raise" || action.type === "all-in").length;
+  const calledRaise = preflop.some((action) => action.type === "call" && action.raiseLevel > 0);
+  const observedPfr = opponent.stats.hands > 0 ? opponent.stats.pfr / opponent.stats.hands : 0.2;
+  const sampleWeight = Math.min(0.72, opponent.stats.hands / 80);
+  const baselineOpen = POSITION_OPEN_RATE[opponent.position];
+  const modeledOpen = baselineOpen * (1 - sampleWeight) + Math.max(0.06, Math.min(0.45, observedPfr)) * sampleWeight;
+  let weight = 0.25 + strength;
+  if (raises >= 3) weight *= 0.08 + Math.pow(strength, 8) * 8;
+  else if (raises === 2) weight *= 0.12 + Math.pow(strength, 6) * 5;
+  else if (raises === 1) {
+    weight *= strength >= 1 - Math.min(0.62, modeledOpen) ? 2.8 : bluffCandidate(cards) ? 0.72 : 0.08;
+  } else if (calledRaise) {
+    weight *= strength > 0.55 && strength < 0.96 ? 2.1 : strength >= 0.96 ? 0.72 : 0.18;
+  }
+
+  for (const action of postflop) {
+    const actionBoard = boardThroughStreet(state.board, action.street);
+    const features = handFeatures(cards, actionBoard);
+    const madeWeight = !features.madeWithHole ? 0.34
+      : features.made >= 4 ? 3.6
+        : features.made === 3 ? 3.1
+          : features.made === 2 ? 2.5
+            : features.made === 1 ? 1.25
+              : 0.5;
+    const drawWeight = features.draw ? 1.45 : features.overcards > 0 && action.street === "flop" ? 1.08 : 0.78;
+    if (action.type === "raise" || action.type === "all-in") {
+      weight *= madeWeight * (features.draw ? 1.18 : 1);
+    } else if (action.type === "call") {
+      weight *= Math.max(0.3, madeWeight * 0.72 + drawWeight * 0.65);
+    } else if (action.type === "check") {
+      weight *= features.made >= 2 ? 0.88 : 1.08;
+    }
+  }
+  return weight;
+}
+
+export function estimateRangeEquity(
+  state: HandState,
+  seatIndex: number,
+  iterations = 72,
   random: () => number = Math.random,
 ) {
   const hole = state.players[seatIndex].hole;
@@ -968,7 +1044,7 @@ function contextualPreflopRaise(state: HandState, seatIndex: number): PokerActio
   return target === bounds.max ? { type: "all-in" } : { type: "raise", amount: target };
 }
 
-function preflopDecision(state: HandState, seatIndex: number, random: () => number): PokerAction {
+function preflopDecisionV6(state: HandState, seatIndex: number, random: () => number): PokerAction {
   const player = state.players[seatIndex];
   const bounds = legalBounds(state, seatIndex);
   const style = PROFILE[player.profile];
@@ -1023,6 +1099,52 @@ function preflopDecision(state: HandState, seatIndex: number, random: () => numb
   return foldAction;
 }
 
+function preflopDecision(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  if (state.raiseCount !== 0) return preflopDecisionV6(state, seatIndex, random);
+
+  const player = state.players[seatIndex];
+  const bounds = legalBounds(state, seatIndex);
+  const style = PROFILE[player.profile];
+  const context = buildBotContext(state, seatIndex);
+  const strength = Math.max(0, Math.min(1, preflopStrength(player.hole) + (random() - 0.5) * 0.018));
+  const passiveAction = bounds.toCall > 0 ? { type: "call" as const } : { type: "check" as const };
+  const foldAction = bounds.toCall > 0 ? { type: "fold" as const } : { type: "check" as const };
+  const limperIndices = [...new Set(context.actions
+    .filter((action) => action.street === "preflop" && action.raiseLevel === 0 && action.type === "call")
+    .map((action) => action.seat))];
+  const limperCallingGap = limperIndices.reduce((sum, index) => {
+    const stats = state.players[index].stats;
+    const observedGap = stats.hands ? (stats.vpip - stats.pfr) / stats.hands : 0.1;
+    const confidence = Math.min(0.7, stats.hands / 70);
+    return sum + 0.1 * (1 - confidence) + observedGap * confidence;
+  }, 0) / Math.max(1, limperIndices.length);
+  const latePosition = player.position === "CO" || player.position === "BTN";
+  let openRate = Math.min(0.62, POSITION_OPEN_RATE[player.position] * style.openFactor);
+
+  if (limperIndices.length > 0) {
+    const outOfPositionPenalty = player.position === "SB" || player.position === "BB" ? 0.78 : 0.9;
+    const stickyPenalty = 1 - Math.max(0, Math.min(0.16, (limperCallingGap - 0.08) * 0.8));
+    openRate *= outOfPositionPenalty * stickyPenalty;
+  }
+  if (strength < 1 - openRate) return foldAction;
+
+  let raiseChance = style.openRaise;
+  if (latePosition && strength > 0.72) {
+    raiseChance = Math.min(0.98, raiseChance + (player.profile === "caller" ? 0.38 : 0.08));
+  }
+  if (limperIndices.length > 0) {
+    const valueIsolationFloor = 1 - Math.min(0.28, openRate * 0.68);
+    const suited = player.hole[0].suit === player.hole[1].suit;
+    const playableIsolation = strength >= valueIsolationFloor
+      || (player.profile === "lag" && suited && strength >= valueIsolationFloor - 0.07 && random() < 0.38);
+    if (!playableIsolation) return player.profile === "caller" && suited && bounds.toCall <= 2 ? passiveAction : foldAction;
+    raiseChance = Math.min(0.98, raiseChance + 0.08);
+  }
+
+  if (bounds.canRaise && random() < raiseChance) return contextualPreflopRaise(state, seatIndex);
+  return passiveAction;
+}
+
 function handFeatures(hole: Card[], board: Card[]) {
   const all = [...hole, ...board];
   const suitCounts = new Map<Suit, number>();
@@ -1038,8 +1160,11 @@ function handFeatures(hole: Card[], board: Card[]) {
   const boardHigh = Math.max(0, ...board.map((card) => VALUES[card.rank]));
   const overcards = hole.filter((card) => VALUES[card.rank] > boardHigh).length;
   const made = evaluateHand(all).score[0];
+  const holePair = hole.length === 2 && hole[0].rank === hole[1].rank;
+  const pairsBoard = hole.some((card) => board.some((boardCard) => boardCard.rank === card.rank));
+  const madeWithHole = holePair || pairsBoard || made >= 2;
   const blocker = hole.some((card) => VALUES[card.rank] === 14 && suitCounts.get(card.suit)! >= 3);
-  return { flushDraw, straightDraw, overcards, made, blocker, draw: flushDraw || straightDraw };
+  return { flushDraw, straightDraw, overcards, made, madeWithHole, blocker, draw: flushDraw || straightDraw };
 }
 
 function postflopRaiseAction(state: HandState, seatIndex: number, strength: number, context: BotDecisionContext) {
@@ -1054,8 +1179,8 @@ function postflopRaiseAction(state: HandState, seatIndex: number, strength: numb
   return { type: "raise" as const, amount: target };
 }
 
-function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  if (state.street === "preflop") return preflopDecision(state, seatIndex, random);
+function decideBotV6FromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  if (state.street === "preflop") return preflopDecisionV6(state, seatIndex, random);
 
   const player = state.players[seatIndex];
   const style = PROFILE[player.profile];
@@ -1063,7 +1188,7 @@ function decideBotFromPublicState(state: HandState, seatIndex: number, random: (
   const context = buildBotContext(state, seatIndex);
   const bounds = legalBounds(state, seatIndex);
   const features = handFeatures(player.hole, context.board);
-  const equity = estimateRangeEquity(state, seatIndex, 48, random);
+  const equity = estimateRangeEquityV6(state, seatIndex, 48, random);
   const multiwayPenalty = Math.max(0, context.activePlayers - 2) * 0.025;
   const realization = context.inPosition ? 0.035 : -0.025;
   const drawRealization = features.draw && context.inPosition ? 0.018 : 0;
@@ -1102,6 +1227,104 @@ function decideBotFromPublicState(state: HandState, seatIndex: number, random: (
 
   const betThreshold = valueRaise - rangeAdvantage - (context.inPosition ? 0.025 : 0) - (context.spr < 1 ? 0.04 : 0);
   const canValueBet = realizedEquity >= betThreshold;
+  const canBluff = random() < bluffChance;
+  if (bounds.canRaise && (canValueBet || canBluff) && random() < style.postflopAggression) {
+    return postflopRaiseAction(state, seatIndex, realizedEquity, context);
+  }
+  return { type: "check" };
+}
+
+export function decideBotV6(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  const publicState = structuredClone(state) as HandState;
+  publicState.players.forEach((player, index) => {
+    if (index !== seatIndex) player.hole = [];
+  });
+  return decideBotV6FromPublicState(publicState, seatIndex, random);
+}
+
+const STAB_PROFILE: Record<BotProfile, number> = {
+  balanced: 0.24,
+  tag: 0.2,
+  lag: 0.36,
+  nit: 0.08,
+  caller: 0.15,
+};
+
+const FOLD_DISCIPLINE: Record<BotProfile, number> = {
+  balanced: 0.025,
+  tag: 0.035,
+  lag: 0.012,
+  nit: 0.065,
+  caller: -0.025,
+};
+
+function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  if (state.street === "preflop") return preflopDecision(state, seatIndex, random);
+
+  const player = state.players[seatIndex];
+  const style = PROFILE[player.profile];
+  const response = RESPONSE_PROFILE[player.profile];
+  const context = buildBotContext(state, seatIndex);
+  const bounds = legalBounds(state, seatIndex);
+  const features = handFeatures(player.hole, context.board);
+  const equity = estimateRangeEquity(state, seatIndex, 56, random);
+  const multiwayPenalty = Math.max(0, context.activePlayers - 2) * 0.028;
+  const realization = context.inPosition ? 0.038 : -0.028;
+  const drawRealization = features.draw && context.inPosition ? 0.02 : 0;
+  const realizedEquity = Math.max(0, Math.min(1, equity + realization + drawRealization - multiwayPenalty));
+  const potOdds = bounds.toCall / Math.max(1, context.pot + bounds.toCall);
+  const isAggressor = context.aggressor === seatIndex;
+  const wetness = boardWetness(context.board);
+  const headsUp = context.activePlayers === 2;
+  const pressure = bounds.toCall / Math.max(1, player.stack + bounds.toCall);
+  const observed = context.opponents.map((index) => state.players[index].stats);
+  const opponentSamples = observed.reduce((sum, stats) => sum + Math.min(60, stats.hands), 0);
+  const observedVpips = observed.reduce((sum, stats) => sum + (stats.hands ? stats.vpip / stats.hands : 0.24), 0) / Math.max(1, observed.length);
+  const observedPfrs = observed.reduce((sum, stats) => sum + (stats.hands ? stats.pfr / stats.hands : 0.18), 0) / Math.max(1, observed.length);
+  const readConfidence = Math.min(0.65, opponentSamples / Math.max(1, observed.length * 60));
+  const callingRead = Math.max(-0.04, Math.min(0.06, (observedVpips - observedPfrs - 0.08) * readConfidence));
+  const futureRisk = context.inPosition ? 0.012 : 0.038 + Math.min(0.05, context.spr * 0.0045);
+  const callFloor = Math.min(0.62, Math.max(0.08, potOdds + futureRisk + FOLD_DISCIPLINE[player.profile] + multiwayPenalty - (features.draw ? 0.045 : 0)));
+  const valueRaise = (bounds.toCall > 0
+    ? style.raiseThreshold + multiwayPenalty - (context.spr < 1 ? 0.055 : 0)
+    : style.betThreshold + multiwayPenalty) - callingRead * 0.45;
+  const rangeAdvantage = isAggressor && wetness < 0.48 ? 0.035 : 0;
+  const positionBluff = context.inPosition ? 1.22 : 0.58;
+  const initiativeBluff = isAggressor ? 1.16 : bounds.toCall === 0 && context.inPosition ? 0.9 : 0.5;
+  const drawBluff = features.draw || features.blocker ? 1.4 : 0.66;
+  const bluffChance = style.bluff * response.bluff * positionBluff * initiativeBluff * drawBluff * (headsUp ? 1 : 0.28) * (pressure > 0.45 ? 0.35 : 1) * (1 - Math.max(0, callingRead) * 4);
+
+  const actionableOpponents = context.opponents.filter((index) => !state.players[index].allIn);
+  const streetActions = context.actions.filter((action) => action.street === state.street);
+  const checkedTo = bounds.toCall === 0
+    && context.inPosition
+    && actionableOpponents.length > 0
+    && actionableOpponents.every((index) => streetActions.some((action) => action.seat === index && action.type === "check"))
+    && !streetActions.some((action) => action.type === "raise" || action.type === "all-in");
+  const priorStreet: Street | null = state.street === "turn" ? "flop" : state.street === "river" ? "turn" : null;
+  const priorCheckedThrough = priorStreet !== null
+    && context.actions.some((action) => action.street === priorStreet && action.type === "check")
+    && !context.actions.some((action) => action.street === priorStreet && (action.type === "raise" || action.type === "all-in"));
+
+  if (bounds.toCall > 0) {
+    const canValueRaise = realizedEquity >= valueRaise;
+    const canBluffRaise = features.draw && random() < bluffChance;
+    if (bounds.canRaise && (canValueRaise || canBluffRaise) && random() < style.postflopAggression) {
+      return postflopRaiseAction(state, seatIndex, realizedEquity, context);
+    }
+    if (realizedEquity + style.callBias < callFloor) return { type: "fold" };
+    return { type: "call" };
+  }
+
+  const betThreshold = valueRaise - rangeAdvantage - (context.inPosition ? 0.025 : 0) - (context.spr < 1 ? 0.04 : 0);
+  const canValueBet = realizedEquity >= betThreshold;
+  const riverBluffCandidate = state.street !== "river" || features.blocker;
+  if (bounds.canRaise && checkedTo && !features.madeWithHole && riverBluffCandidate) {
+    const candidateQuality = features.draw || features.blocker ? 1.25 : features.overcards > 0 ? 1 : 0.72;
+    const delayedBonus = priorCheckedThrough ? 1.3 : 1;
+    const stabChance = STAB_PROFILE[player.profile] * candidateQuality * delayedBonus * (headsUp ? 1 : 0.36) * (1 - Math.max(0, callingRead) * 4);
+    if (random() < stabChance) return postflopRaiseAction(state, seatIndex, realizedEquity, context);
+  }
   const canBluff = random() < bluffChance;
   if (bounds.canRaise && (canValueBet || canBluff) && random() < style.postflopAggression) {
     return postflopRaiseAction(state, seatIndex, realizedEquity, context);

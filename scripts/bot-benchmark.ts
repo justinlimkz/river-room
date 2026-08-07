@@ -2,7 +2,7 @@ import {
   applyAction,
   createSession,
   decideBot,
-  decideBotLegacy,
+  decideBotV6,
   potTotal,
   seededRandom,
   type BotProfile,
@@ -24,7 +24,7 @@ function runHand(seed: number, upgraded: Set<number>, profile: BotProfile | "mix
     const actor = state.currentActor;
     const action = upgraded.has(actor)
       ? decideBot(state, actor, decisionRandom)
-      : decideBotLegacy(state, actor, decisionRandom);
+      : decideBotV6(state, actor, decisionRandom);
     state = applyAction(state, actor, action);
     decisions += 1;
   }
@@ -74,4 +74,4 @@ const results = mixedOnly
       ...(["balanced", "tag", "lag", "nit", "caller"] as BotProfile[]).map((profile, index) => summarize(profile, profileDeals, 200_000 + index * 10_000)),
     ];
 
-console.log(JSON.stringify({ benchmark: "paired duplicate deals; upgraded and legacy seats swapped", results }, null, 2));
+console.log(JSON.stringify({ benchmark: "paired duplicate deals; current and immediate-predecessor seats swapped", results }, null, 2));

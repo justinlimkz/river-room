@@ -8,6 +8,9 @@ import {
   createSession,
   decideBot,
   decideBotLegacy,
+  decideBotV6,
+  estimateRangeEquity,
+  estimateRangeEquityV6,
   evaluateHand,
   legalBounds,
   migrateSavedState,
@@ -291,6 +294,114 @@ test("bot decisions do not change when forbidden opponent cards change", () => {
   assert.deepEqual(decideBot(state, actor, seededRandom(7)), decideBot(altered, actor, seededRandom(7)));
 });
 
+test("postflop range updates respond to board-relative value actions", () => {
+  const state = createSession(seededRandom(810));
+  const hero = 5;
+  const opponent = 0;
+  state.street = "river";
+  state.currentActor = hero;
+  state.board = [card("8", "hearts"), card("9", "clubs"), card("2", "clubs"), card("6", "hearts"), card("K", "hearts")];
+  state.players[hero].hole = [card("A", "spades"), card("9", "spades")];
+  state.players.forEach((player, index) => { player.folded = index !== hero && index !== opponent; });
+  state.actionLog = [
+    { street: "preflop", seat: hero, type: "raise", amount: 8, toCallBefore: 2, raiseLevel: 0 },
+    { street: "preflop", seat: opponent, type: "call", amount: 8, toCallBefore: 6, raiseLevel: 1 },
+    { street: "flop", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0 },
+    { street: "flop", seat: hero, type: "raise", amount: 18, toCallBefore: 0, raiseLevel: 0 },
+    { street: "flop", seat: opponent, type: "call", amount: 18, toCallBefore: 18, raiseLevel: 1 },
+    { street: "turn", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0 },
+    { street: "turn", seat: hero, type: "raise", amount: 59, toCallBefore: 0, raiseLevel: 0 },
+    { street: "turn", seat: opponent, type: "call", amount: 59, toCallBefore: 59, raiseLevel: 1 },
+    { street: "river", seat: opponent, type: "all-in", amount: 115, toCallBefore: 0, raiseLevel: 0 },
+  ];
+  const prior = estimateRangeEquityV6(state, hero, 1200, seededRandom(99));
+  const revised = estimateRangeEquity(state, hero, 1200, seededRandom(99));
+  assert.ok(revised < prior - 0.07, `prior ${prior}, revised ${revised}`);
+});
+
+test("passive profiles sometimes stab after the aggressor checks to them", () => {
+  const state = createSession(seededRandom(811));
+  const actor = state.players.findIndex((player) => player.position === "BTN");
+  const opponent = state.players.findIndex((player) => player.position === "BB");
+  state.street = "flop";
+  state.currentActor = actor;
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.board = [card("T", "hearts"), card("5", "hearts"), card("5", "spades")];
+  state.players.forEach((player, index) => {
+    player.folded = index !== actor && index !== opponent;
+    player.committed = index === actor || index === opponent ? 8 : 0;
+    player.streetBet = 0;
+  });
+  state.players[actor].profile = "caller";
+  state.players[actor].hole = [card("9", "clubs"), card("8", "clubs")];
+  state.preflopAggressor = opponent;
+  state.actionLog = [
+    { street: "preflop", seat: opponent, type: "raise", amount: 8, toCallBefore: 1, raiseLevel: 0 },
+    { street: "preflop", seat: actor, type: "call", amount: 8, toCallBefore: 6, raiseLevel: 1 },
+    { street: "flop", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0 },
+  ];
+  let priorBets = 0;
+  let revisedBets = 0;
+  for (let seed = 1; seed <= 500; seed += 1) {
+    if (["raise", "all-in"].includes(decideBotV6(state, actor, seededRandom(seed)).type)) priorBets += 1;
+    if (["raise", "all-in"].includes(decideBot(state, actor, seededRandom(seed)).type)) revisedBets += 1;
+  }
+  assert.ok(revisedBets >= 35, `revised stabs ${revisedBets}`);
+  assert.ok(revisedBets > priorBets + 25, `prior ${priorBets}, revised ${revisedBets}`);
+});
+
+test("passive BTN players raise strong playable opens more often", () => {
+  const state = createSession(seededRandom(812));
+  const actor = state.players.findIndex((player) => player.position === "BTN");
+  state.currentActor = actor;
+  state.players[actor].profile = "caller";
+  state.players[actor].hole = [card("A", "clubs"), card("9", "clubs")];
+  let priorRaises = 0;
+  let revisedRaises = 0;
+  for (let seed = 1; seed <= 300; seed += 1) {
+    if (["raise", "all-in"].includes(decideBotV6(state, actor, seededRandom(seed)).type)) priorRaises += 1;
+    if (["raise", "all-in"].includes(decideBot(state, actor, seededRandom(seed)).type)) revisedRaises += 1;
+  }
+  assert.ok(revisedRaises > priorRaises + 90, `prior ${priorRaises}, revised ${revisedRaises}`);
+});
+
+test("SB isolation ranges tighten against sticky limpers", () => {
+  const state = createSession(seededRandom(813));
+  const actor = state.players.findIndex((player) => player.position === "SB");
+  const limper = state.players.findIndex((player) => player.position === "BTN");
+  state.currentActor = actor;
+  state.players[actor].hole = [card("A", "clubs"), card("8", "spades")];
+  state.players[limper].stats.hands = 70;
+  state.players[limper].stats.vpip = 35;
+  state.players[limper].stats.pfr = 2;
+  state.players[limper].voluntaryPreflop = true;
+  state.actionLog = [{ street: "preflop", seat: limper, type: "call", amount: 2, toCallBefore: 2, raiseLevel: 0 }];
+  let priorRaises = 0;
+  let revisedRaises = 0;
+  for (let seed = 1; seed <= 300; seed += 1) {
+    if (["raise", "all-in"].includes(decideBotV6(state, actor, seededRandom(seed)).type)) priorRaises += 1;
+    if (["raise", "all-in"].includes(decideBot(state, actor, seededRandom(seed)).type)) revisedRaises += 1;
+  }
+  assert.ok(revisedRaises < priorRaises * 0.5, `prior ${priorRaises}, revised ${revisedRaises}`);
+});
+
+test("the latest street aggressor remains the initiative owner", () => {
+  const state = createSession(seededRandom(814));
+  const preflopAggressor = state.players.findIndex((player) => player.position === "CO");
+  const flopAggressor = state.players.findIndex((player) => player.position === "BTN");
+  const actor = state.players.findIndex((player) => player.position === "BB");
+  state.street = "turn";
+  state.currentActor = actor;
+  state.preflopAggressor = preflopAggressor;
+  state.lastAggressor = null;
+  state.actionLog = [
+    { street: "preflop", seat: preflopAggressor, type: "raise", amount: 6, toCallBefore: 2, raiseLevel: 0 },
+    { street: "flop", seat: flopAggressor, type: "raise", amount: 10, toCallBefore: 0, raiseLevel: 0 },
+  ];
+  assert.equal(buildBotContext(state, actor).aggressor, flopAggressor);
+});
+
 test("the new strategy remains behaviorally distinct from the frozen legacy benchmark", () => {
   const state = createSession(seededRandom(18));
   const actor = 2;
@@ -523,6 +634,6 @@ test("postflop profiles separate calling, folding, and aggression without extrem
   assert.ok(aggression("balanced") < aggression("lag"));
   assert.ok(foldRate("caller") < foldRate("balanced"));
   assert.ok(foldRate("balanced") < foldRate("nit"));
-  assert.ok(foldRate("caller") >= 0.12 && foldRate("caller") <= 0.38);
-  assert.ok(foldRate("nit") >= 0.32 && foldRate("nit") <= 0.62);
+  assert.ok(foldRate("caller") >= 0.12 && foldRate("caller") <= 0.38, `caller fold rate ${foldRate("caller")}`);
+  assert.ok(foldRate("nit") >= 0.32 && foldRate("nit") <= 0.62, `nit fold rate ${foldRate("nit")}`);
 });
