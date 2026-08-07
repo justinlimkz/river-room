@@ -24,12 +24,15 @@ test("server-renders the River Room application shell", async () => {
 });
 
 test("starter preview is fully removed", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+  const [page, table, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/PokerTable.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
   assert.match(page, /PokerTable/);
+  assert.match(table, /River Room house rules/);
+  assert.match(table, /No cap on raises/);
   assert.match(layout, /River Room/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
 });

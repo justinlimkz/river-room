@@ -90,10 +90,33 @@ function ReviewPanel({ state, onClose }: { state: HandState; onClose: () => void
                   <div><small>Pot odds</small><strong>{Math.round(item.potOdds * 100)}%</strong></div>
                 </div>
                 <p><strong>Better line: {item.suggestion}.</strong> {item.note}</p>
+                {item.basis && <small className="review-basis">{item.confidence ?? "Low"} confidence · {item.basis}</small>}
               </article>
             ))}
           </div>
         )}
+        <button className="primary wide" onClick={onClose}>Back to table</button>
+      </div>
+    </div>
+  );
+}
+
+function RulesPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+      <div className="review-panel rules-panel">
+        <div className="review-header">
+          <div><span className="eyebrow">River Room house rules</span><h2 id="rules-title">$1/$2 no-limit cash</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="Close table rules">×</button>
+        </div>
+        <div className="rules-list">
+          <p><strong>Format</strong><span>Six seats, $200 initial stacks, table stakes, no rake, and no blind escalation.</span></p>
+          <p><strong>Betting</strong><span>No cap on raises. A full raise establishes the next minimum; cumulative short all-ins reopen action only after totaling a full raise.</span></p>
+          <p><strong>All-ins</strong><span>Main and side pots are awarded independently. Uncalled excess is returned before the contested pot is described.</span></p>
+          <p><strong>Showdown</strong><span>The best five-card Hold’em hand wins. Ties split the pot; an odd chip goes to the first tied winner clockwise left of the button.</span></p>
+          <p><strong>Seats</strong><span>Busted opponents leave. The moving button skips empty seats, with a heads-up adjustment that prevents the same player posting the big blind twice.</span></p>
+          <p><strong>Not offered</strong><span>No straddles, missed-blind posting, buying the button, running it twice, rabbit hunting, or automatic opponent rebuys.</span></p>
+        </div>
         <button className="primary wide" onClick={onClose}>Back to table</button>
       </div>
     </div>
@@ -130,6 +153,7 @@ export default function PokerTable() {
   const [state, setState] = useState<HandState | null>(null);
   const [raiseTo, setRaiseTo] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const act = (action: PokerAction) => {
     setRaiseTo(null);
@@ -207,6 +231,7 @@ export default function PokerTable() {
         <div className="brand"><span className="brand-mark">R</span><div><strong>River Room</strong><small>Hold’em trainer</small></div></div>
         <div className="table-meta"><span>{seatedPlayers === 6 ? "6-MAX" : `${seatedPlayers}-HANDED`} CASH</span><b>$1 / $2 NL</b><span>100 BB BUY-IN</span></div>
         <div className="header-actions">
+          <button onClick={() => setRulesOpen(true)}>Table rules</button>
           <button onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>Hand log</button>
           <button onClick={reset}>Reset session</button>
         </div>
@@ -306,6 +331,7 @@ export default function PokerTable() {
         </aside>
       </div>
       {reviewOpen && <ReviewPanel state={state} onClose={() => setReviewOpen(false)} />}
+      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
     </main>
   );
 }

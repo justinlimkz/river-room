@@ -7,6 +7,7 @@ export type ActionKind = "fold" | "check" | "call" | "raise" | "all-in";
 export type BotProfile = "balanced" | "tag" | "lag" | "nit" | "caller";
 
 export type PokerAction = { type: ActionKind; amount?: number };
+export type ActionValidation = { legal: boolean; reason: string; target?: number };
 export type PlayerStats = {
   hands: number;
   vpip: number;
@@ -69,6 +70,8 @@ export type ReviewItem = {
   grade: "Strong" | "Reasonable" | "Questionable";
   suggestion: string;
   note: string;
+  confidence?: "High" | "Medium" | "Low";
+  basis?: string;
 };
 
 export type HandState = {
@@ -304,7 +307,12 @@ export function startHand(previous: HandState, random: () => number = cryptoRand
     };
   }
 
-  const dealer = nextSeatedSeat(previous.dealer, players);
+  const previousBigBlind = previous.players.findIndex((player) => player.position === "BB" && player.hole.length === 2);
+  const headsUp = seated.length === 2;
+  const headsUpBigBlind = headsUp && previousBigBlind >= 0
+    ? nextSeatedSeat(previousBigBlind, players)
+    : -1;
+  const dealer = headsUp ? nextSeatedSeat(headsUpBigBlind, players) : nextSeatedSeat(previous.dealer, players);
   const positions = positionsForTable(seated.length);
   let positionSeat = dealer;
   positions.forEach((position, offset) => {
@@ -321,9 +329,8 @@ export function startHand(previous: HandState, random: () => number = cryptoRand
   for (let round = 0; round < 2; round += 1) {
     dealOrder.forEach((seat) => players[seat].hole.push(deck.pop()!));
   }
-  const headsUp = seated.length === 2;
   const sb = headsUp ? dealer : nextSeatedSeat(dealer, players);
-  const bb = nextSeatedSeat(sb, players);
+  const bb = headsUp ? headsUpBigBlind : nextSeatedSeat(sb, players);
   pay(players[sb], 1);
   pay(players[bb], 2);
   players[sb].lastAction = "SB $1";
@@ -361,6 +368,42 @@ export function legalBounds(state: HandState, seat: number) {
   return { toCall: toCallFor(state, seat), min, max, canRaise: max > state.currentBet && actionReopened };
 }
 
+export function validateAction(state: HandState, seat: number, action: PokerAction): ActionValidation {
+  if (state.status !== "playing") return { legal: false, reason: "The hand is not active." };
+  if (state.currentActor !== seat) return { legal: false, reason: "It is not this seat's turn." };
+  const player = state.players[seat];
+  if (!player || player.folded || player.allIn || player.stack <= 0) return { legal: false, reason: "This seat cannot act." };
+  const bounds = legalBounds(state, seat);
+  if (action.type === "fold") return { legal: true, reason: "Fold is legal." };
+  if (action.type === "check") return bounds.toCall === 0
+    ? { legal: true, reason: "Check is legal." }
+    : { legal: false, reason: `Checking is unavailable while facing $${bounds.toCall}.` };
+  if (action.type === "call") return bounds.toCall > 0
+    ? { legal: true, reason: "Call is legal." }
+    : { legal: false, reason: "There is no wager to call." };
+
+  if (action.type === "raise" && (!Number.isFinite(action.amount) || action.amount === undefined)) {
+    return { legal: false, reason: "A raise requires a finite target amount." };
+  }
+  const target = action.type === "all-in" ? bounds.max : Math.round(action.amount!);
+  if (action.type === "raise" && target <= state.currentBet) {
+    return { legal: false, reason: "A raise must exceed the current wager." };
+  }
+  if (target > state.currentBet && !bounds.canRaise) {
+    return { legal: false, reason: "Betting has not been reopened for this seat." };
+  }
+  if (target <= state.currentBet && action.type !== "all-in") {
+    return { legal: false, reason: "Only a short all-in may call for less than the full amount." };
+  }
+  if (target > state.currentBet && target < bounds.min && target !== bounds.max) {
+    return { legal: false, reason: `The minimum legal raise is to $${bounds.min}.` };
+  }
+  if (target > bounds.max || target <= player.streetBet) {
+    return { legal: false, reason: "The target is outside this seat's available stack." };
+  }
+  return { legal: true, reason: action.type === "all-in" ? "All-in is legal." : "Raise is legal.", target };
+}
+
 function activePlayers(state: HandState) {
   return state.players.filter((player) => !player.folded);
 }
@@ -374,11 +417,11 @@ function append(state: HandState, message: string) {
 }
 
 export function applyAction(input: HandState, seatIndex: number, action: PokerAction): HandState {
-  if (input.status !== "playing" || input.currentActor !== seatIndex) return input;
+  const validation = validateAction(input, seatIndex, action);
+  if (!validation.legal) return input;
   const state = structuredClone(input) as HandState;
   const player = state.players[seatIndex];
   const beforeToCall = toCallFor(state, seatIndex);
-  const bounds = legalBounds(state, seatIndex);
   const oldCurrentBet = state.currentBet;
   const raiseLevelBefore = state.raiseCount;
   let recordedKind: "fold" | "check" | "call" | "raise";
@@ -405,11 +448,7 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
       player.voluntaryPreflop = true;
     }
   } else if (action.type === "all-in" || action.type === "raise") {
-    let target = action.type === "all-in" ? bounds.max : Math.round(action.amount ?? bounds.min);
-    target = Math.max(player.streetBet, Math.min(bounds.max, target));
-    if (target > state.currentBet && !bounds.canRaise) return input;
-    if (target <= state.currentBet && target < bounds.max) return input;
-    if (target > state.currentBet && target < bounds.min && target !== bounds.max) return input;
+    const target = validation.target!;
     const paid = pay(player, target - player.streetBet);
     const raiseSize = target - oldCurrentBet;
     const fullRaise = target > oldCurrentBet && raiseSize >= state.minRaise;
@@ -671,6 +710,164 @@ const PREFLOP_PERCENTILES = (() => {
 export function preflopStrength(cards: Card[]) {
   if (cards.length !== 2) return 0;
   return PREFLOP_PERCENTILES.get(preflopRawScore(cards)) ?? 0;
+}
+
+export function startingHandKey(cards: Card[]) {
+  if (cards.length !== 2) return "";
+  const ordered = [...cards].sort((a, b) => VALUES[b.rank] - VALUES[a.rank]);
+  if (ordered[0].rank === ordered[1].rank) return `${ordered[0].rank}${ordered[1].rank}`;
+  return `${ordered[0].rank}${ordered[1].rank}${ordered[0].suit === ordered[1].suit ? "s" : "o"}`;
+}
+
+function expandRange(specification: string) {
+  const hands = new Set<string>();
+  for (const token of specification.split(/\s+/).filter(Boolean)) {
+    const pair = token.match(/^([2-9TJQKA])\1(\+)?$/);
+    if (pair) {
+      const start = VALUES[pair[1] as Rank];
+      const ranks = pair[2] ? RANKS.filter((rank) => VALUES[rank] >= start) : [pair[1] as Rank];
+      ranks.forEach((rank) => hands.add(`${rank}${rank}`));
+      continue;
+    }
+    const unpaired = token.match(/^([2-9TJQKA])([2-9TJQKA])([so])(\+)?$/);
+    if (!unpaired) continue;
+    const high = unpaired[1] as Rank;
+    const low = unpaired[2] as Rank;
+    const suitedness = unpaired[3];
+    if (!unpaired[4]) {
+      hands.add(`${high}${low}${suitedness}`);
+      continue;
+    }
+    RANKS.filter((rank) => VALUES[rank] >= VALUES[low] && VALUES[rank] < VALUES[high])
+      .forEach((rank) => hands.add(`${high}${rank}${suitedness}`));
+  }
+  return hands;
+}
+
+const SHORT_SHOVE_SPECS: Record<Position, string> = {
+  UTG: "77+ AJs+ AQo+ KQs",
+  HJ: "66+ ATs+ AJo+ KQs",
+  CO: "55+ A9s+ ATo+ KJs+ QJs",
+  BTN: "44+ A7s+ A9o+ KTs+ KQo QJs",
+  "BTN/SB": "22+ A2s+ A7o+ K8s+ KTo+ Q9s+ QJo JTs",
+  SB: "33+ A5s+ A8o+ K9s+ KJo+ QTs+ JTs",
+  BB: "66+ ATs+ AJo+ KQs",
+};
+
+const SHORT_CONTINUE_SPEC = "22+ A2s+ A8o+ K8s+ KTo+ Q9s+ QJo J9s+ JTo T8s+ 98s 87s 76s";
+const PREMIUM_SHORT_SPEC = "TT+ AQs+ AKo";
+const SHORT_SHOVE_RANGES = Object.fromEntries(
+  Object.entries(SHORT_SHOVE_SPECS).map(([position, specification]) => [position, expandRange(specification)]),
+) as Record<Position, Set<string>>;
+const SHORT_CONTINUE_RANGE = expandRange(SHORT_CONTINUE_SPEC);
+const PREMIUM_SHORT_RANGE = expandRange(PREMIUM_SHORT_SPEC);
+const DEEP_OPEN_SPECS: Record<Position, string> = {
+  UTG: "22+ A2s+ KTs+ QTs+ JTs T9s 98s 87s ATo+ KQo",
+  HJ: "22+ A2s+ K9s+ Q9s+ J9s+ T9s 98s 87s 76s ATo+ KJo+ QJo",
+  CO: "22+ A2s+ K7s+ Q8s+ J8s+ T8s+ 97s+ 86s+ 75s+ A9o+ KTo+ QTo+ JTo",
+  BTN: "22+ A2s+ K2s+ Q5s+ J7s+ T7s+ 96s+ 86s+ 75s+ 65s 54s A7o+ K9o+ Q9o+ J9o+ T9o",
+  "BTN/SB": "22+ A2s+ K2s+ Q2s+ J4s+ T5s+ 95s+ 85s+ 74s+ 64s+ 53s+ A2o+ K7o+ Q8o+ J8o+ T8o+ 98o",
+  SB: "22+ A2s+ K4s+ Q6s+ J7s+ T7s+ 96s+ 86s+ 75s+ 65s A7o+ K9o+ Q9o+ J9o+ T9o",
+  BB: "22+ A2s+ K2s+ Q5s+ J7s+ T7s+ 97s+ 86s+ 75s+ A7o+ K9o+ Q9o+ J9o+",
+};
+const DEEP_CONTINUE_SPECS: Record<Position, string> = {
+  UTG: "22+ AQs+ AKo KQs",
+  HJ: "22+ AJs+ AQo+ KQs QJs",
+  CO: "22+ ATs+ AJo+ KQs KJs QJs JTs T9s",
+  BTN: "22+ A8s+ ATo+ KTs+ KQo QTs+ JTs T9s 98s",
+  "BTN/SB": "22+ A2s+ A8o+ K8s+ KTo+ Q9s+ QJo J9s+ JTo T8s+ 98s 87s",
+  SB: "22+ A5s+ A9o+ K9s+ KJo+ QTs+ JTs T9s",
+  BB: "22+ A8s+ ATo+ KTs+ KQo QTs+ JTs T9s",
+};
+const DEEP_THREE_BET_SPECS: Record<Position, string> = {
+  UTG: "QQ+ AKs AKo A5s",
+  HJ: "JJ+ AQs+ AKo A5s",
+  CO: "TT+ AQs+ AKo A5s A4s KQs",
+  BTN: "99+ AJs+ AQo+ A5s A4s KQs",
+  "BTN/SB": "88+ ATs+ AJo+ A5s A4s KJs+ QJs",
+  SB: "88+ ATs+ AJo+ A5s A4s KJs+ QJs",
+  BB: "JJ+ AQs+ AKo",
+};
+const DEEP_OPEN_RANGES = Object.fromEntries(Object.entries(DEEP_OPEN_SPECS).map(([position, spec]) => [position, expandRange(spec)])) as Record<Position, Set<string>>;
+const DEEP_CONTINUE_RANGES = Object.fromEntries(Object.entries(DEEP_CONTINUE_SPECS).map(([position, spec]) => [position, expandRange(spec)])) as Record<Position, Set<string>>;
+const DEEP_THREE_BET_RANGES = Object.fromEntries(Object.entries(DEEP_THREE_BET_SPECS).map(([position, spec]) => [position, expandRange(spec)])) as Record<Position, Set<string>>;
+const DEEP_FOUR_BET_RANGE = expandRange("QQ+ AKs AKo");
+
+export type PreflopPlan = {
+  preferred: "fold" | "call" | "raise" | "all-in";
+  confidence: "High" | "Medium";
+  effectiveStackBb: number;
+  hand: string;
+  reason: string;
+};
+
+export function analyzePreflopSpot(state: HandState, seatIndex: number): PreflopPlan | null {
+  if (state.street !== "preflop") return null;
+  const player = state.players[seatIndex];
+  const hand = startingHandKey(player.hole);
+  if (!hand) return null;
+  const context = buildBotContext(state, seatIndex);
+  const lastRaiser = [...context.actions].reverse().find((action) => action.street === "preflop" && (action.type === "raise" || action.type === "all-in"))?.seat ?? null;
+  const opponentStack = lastRaiser === null
+    ? Math.max(0, ...context.opponents.map((index) => state.players[index].stack + state.players[index].streetBet))
+    : state.players[lastRaiser].stack + state.players[lastRaiser].streetBet;
+  const effectiveStackBb = Math.round((Math.min(player.stack + player.streetBet, opponentStack || player.stack + player.streetBet) / 2) * 10) / 10;
+  if (effectiveStackBb > 25) {
+    if (state.raiseCount === 0) {
+      const preferred = DEEP_OPEN_RANGES[player.position].has(hand) ? "raise" : toCallFor(state, seatIndex) > 0 ? "fold" : "call";
+      return {
+        preferred,
+        confidence: "Medium",
+        effectiveStackBb,
+        hand,
+        reason: preferred === "raise" ? `${hand} is inside the ${player.position} opening range.` : `${hand} is outside the ${player.position} opening range.`,
+      };
+    }
+    const openerPosition = context.facingPosition ?? "UTG";
+    if (state.raiseCount === 1 && DEEP_THREE_BET_RANGES[openerPosition].has(hand)) {
+      return { preferred: "raise", confidence: PREMIUM_SHORT_RANGE.has(hand) ? "High" : "Medium", effectiveStackBb, hand, reason: `${hand} belongs to the value or mixed three-bet range against a ${openerPosition} open.` };
+    }
+    if (state.raiseCount === 1 && DEEP_CONTINUE_RANGES[openerPosition].has(hand)) {
+      return { preferred: "call", confidence: "Medium", effectiveStackBb, hand, reason: `${hand} can continue against this ${openerPosition} opening range and price.` };
+    }
+    if (state.raiseCount === 2 && DEEP_FOUR_BET_RANGE.has(hand)) {
+      return { preferred: "raise", confidence: "High", effectiveStackBb, hand, reason: `${hand} is strong enough to continue aggressively against a three-bet.` };
+    }
+    return { preferred: "fold", confidence: "Medium", effectiveStackBb, hand, reason: `${hand} falls outside the modeled continuing range after this preflop action.` };
+  }
+
+  if (state.raiseCount === 0) {
+    const openRate = Math.min(0.68, POSITION_OPEN_RATE[player.position] * PROFILE[player.profile].openFactor + (effectiveStackBb <= 12 ? 0.08 : 0));
+    const playable = preflopStrength(player.hole) >= 1 - openRate;
+    if (!playable) return { preferred: toCallFor(state, seatIndex) > 0 ? "fold" : "call", confidence: "High", effectiveStackBb, hand, reason: "This hand falls outside the short-stack opening range." };
+    return {
+      preferred: effectiveStackBb <= 8 ? "all-in" : "raise",
+      confidence: "High",
+      effectiveStackBb,
+      hand,
+      reason: effectiveStackBb <= 8 ? "At eight big blinds or less, this playable hand belongs in the open-shove range." : "Short stacks favor raising rather than limping a playable opening hand.",
+    };
+  }
+
+  const openerPosition = context.facingPosition ?? "UTG";
+  const shoveRange = SHORT_SHOVE_RANGES[openerPosition];
+  const premium = PREMIUM_SHORT_RANGE.has(hand);
+  const shove = premium || shoveRange.has(hand);
+  if (shove) {
+    return {
+      preferred: "all-in",
+      confidence: premium ? "High" : "Medium",
+      effectiveStackBb,
+      hand,
+      reason: premium
+        ? `${hand} is a mandatory short-stack value shove against this raise.`
+        : `${hand} is inside the ${openerPosition} short-stack reshove range.`,
+    };
+  }
+  if (state.raiseCount === 1 && SHORT_CONTINUE_RANGE.has(hand) && toCallFor(state, seatIndex) <= player.stack * 0.28) {
+    return { preferred: "call", confidence: "Medium", effectiveStackBb, hand, reason: "The hand can continue at this price but is not strong enough to reshove." };
+  }
+  return { preferred: "fold", confidence: "High", effectiveStackBb, hand, reason: "The price and short effective stack leave insufficient room to continue profitably." };
 }
 
 export function estimateEquity(hole: Card[], board: Card[], opponents: number, iterations = 70, random: () => number = Math.random) {
@@ -1126,7 +1323,7 @@ function preflopDecisionV6(state: HandState, seatIndex: number, random: () => nu
   return foldAction;
 }
 
-function preflopDecision(state: HandState, seatIndex: number, random: () => number): PokerAction {
+function preflopDecisionV7(state: HandState, seatIndex: number, random: () => number): PokerAction {
   if (state.raiseCount !== 0) return preflopDecisionV6(state, seatIndex, random);
 
   const player = state.players[seatIndex];
@@ -1285,8 +1482,8 @@ const FOLD_DISCIPLINE: Record<BotProfile, number> = {
   caller: -0.025,
 };
 
-function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  if (state.street === "preflop") return preflopDecision(state, seatIndex, random);
+function decideBotV7FromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  if (state.street === "preflop") return preflopDecisionV7(state, seatIndex, random);
 
   const player = state.players[seatIndex];
   const style = PROFILE[player.profile];
@@ -1359,6 +1556,33 @@ function decideBotFromPublicState(state: HandState, seatIndex: number, random: (
   return { type: "check" };
 }
 
+export function decideBotV7(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  const publicState = structuredClone(state) as HandState;
+  publicState.players.forEach((player, index) => {
+    if (index !== seatIndex) player.hole = [];
+  });
+  return decideBotV7FromPublicState(publicState, seatIndex, random);
+}
+
+function preflopDecision(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  const plan = analyzePreflopSpot(state, seatIndex);
+  if (!plan || plan.effectiveStackBb > 25) return preflopDecisionV7(state, seatIndex, random);
+  if (plan.preferred === "all-in") {
+    if (plan.confidence === "High" || random() < ({ balanced: 0.9, tag: 0.94, lag: 0.96, nit: 0.86, caller: 0.78 } as Record<BotProfile, number>)[state.players[seatIndex].profile]) {
+      return { type: "all-in" };
+    }
+    return toCallFor(state, seatIndex) > 0 ? { type: "call" } : contextualPreflopRaise(state, seatIndex);
+  }
+  if (plan.preferred === "raise") return contextualPreflopRaise(state, seatIndex);
+  if (plan.preferred === "call") return toCallFor(state, seatIndex) > 0 ? { type: "call" } : { type: "check" };
+  return toCallFor(state, seatIndex) > 0 ? { type: "fold" } : { type: "check" };
+}
+
+function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  if (state.street === "preflop") return preflopDecision(state, seatIndex, random);
+  return decideBotV7FromPublicState(state, seatIndex, random);
+}
+
 export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
   const publicState = structuredClone(state) as HandState;
   publicState.players.forEach((player, index) => {
@@ -1374,6 +1598,39 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const context = buildBotContext(state, humanSeat);
   const equity = state.street === "preflop" ? preflopStrength(player.hole) : estimateRangeEquity(state, humanSeat, 120);
   const potOdds = toCall / Math.max(1, pot + toCall);
+  const preflopPlan = analyzePreflopSpot(state, humanSeat);
+  if (preflopPlan) {
+    const aggressiveAction = action.type === "raise" || action.type === "all-in";
+    const matched = preflopPlan.preferred === "all-in" ? aggressiveAction && (action.type === "all-in" || action.amount === player.stack + player.streetBet)
+      : preflopPlan.preferred === "raise" ? aggressiveAction
+        : preflopPlan.preferred === "call" ? action.type === "call" || (action.type === "check" && toCall === 0)
+          : action.type === "fold";
+    const adjacent = !matched && ((preflopPlan.preferred === "all-in" && action.type === "call")
+      || (preflopPlan.preferred === "raise" && action.type === "call")
+      || (preflopPlan.preferred === "call" && aggressiveAction));
+    const suggestion = preflopPlan.preferred === "all-in" ? "Move all-in"
+      : preflopPlan.preferred === "raise" ? "Raise"
+        : preflopPlan.preferred === "call" ? (toCall > 0 ? "Call" : "Check")
+          : "Fold";
+    const actionText = action.type === "raise" ? `Raised to $${action.amount}` : action.type.replace("-", " ");
+    return {
+      street: state.street,
+      position: player.position,
+      cards: player.hole,
+      board: state.board,
+      pot,
+      toCall,
+      action: actionText[0].toUpperCase() + actionText.slice(1),
+      equity,
+      equityLabel: "Hand percentile",
+      potOdds,
+      grade: matched ? "Strong" : adjacent ? "Reasonable" : "Questionable",
+      suggestion,
+      note: preflopPlan.reason,
+      confidence: preflopPlan.confidence,
+      basis: `${preflopPlan.hand} · ${preflopPlan.effectiveStackBb} BB effective · stack-aware preflop chart`,
+    };
+  }
   const strong = equity > Math.max(0.56, potOdds + 0.18);
   const weak = equity < potOdds - 0.03;
   const suggestion = toCall === 0 ? (strong ? "Bet for value" : "Check is sound") : weak ? "Fold" : strong ? "Raise for value" : "Call";
@@ -1399,6 +1656,8 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
       : strong
         ? "Your range has a meaningful edge here. Building the pot is usually preferable to giving a free card."
         : `This is a close, range-dependent spot. You are ${context.inPosition ? "in position" : "out of position"} in a ${context.potType} pot, so future betting and equity realization matter nearly as much as raw equity.`,
+    confidence: "Low",
+    basis: "Approximate range simulation; not a solved strategy",
   };
 }
 

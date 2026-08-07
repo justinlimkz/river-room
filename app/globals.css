@@ -176,6 +176,11 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
 .review-metrics div { display: flex; flex-direction: column; border-left: 1px solid var(--line); padding-left: 8px; }
 .review-metrics small { color: #718078; font-size: 8px; }.review-metrics strong { margin-top: 3px; font: 600 13px var(--font-geist-mono); }
 .review-item p { color: #aab3ae; font-size: 11px; line-height: 1.5; margin: 0; }.review-item p strong { color: var(--ink); }
+.review-basis { display: block; margin-top: 8px; color: #738078; font: 500 8px var(--font-geist-mono); text-transform: uppercase; letter-spacing: .04em; }
+.rules-panel { max-width: 600px; }
+.rules-list { display: grid; gap: 8px; margin: 2px 0 16px; }
+.rules-list p { display: grid; grid-template-columns: 96px 1fr; gap: 12px; margin: 0; padding: 10px 0; border-bottom: 1px solid var(--line); color: #aab3ae; font-size: 11px; line-height: 1.45; }
+.rules-list strong { color: var(--ink); }
 .wide { width: 100%; padding: 11px; cursor: pointer; border-radius: 7px; }
 .empty { color: var(--muted); padding: 20px 0; }
 

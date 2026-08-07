@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyAction,
+  analyzePreflopSpot,
   buildBotContext,
   cardLabel,
   CLOCKWISE_SEATS,
@@ -9,6 +10,7 @@ import {
   decideBot,
   decideBotLegacy,
   decideBotV6,
+  decideBotV7,
   estimateRangeEquity,
   estimateRangeEquityV6,
   evaluateHand,
@@ -19,7 +21,9 @@ import {
   seededRandom,
   shuffledDeck,
   startHand,
+  startingHandKey,
   toCallFor,
+  validateAction,
   type BotProfile,
   type Card,
   type Position,
@@ -59,6 +63,17 @@ test("two sets correctly make a full house using the lower set as the pair", () 
   ]);
   assert.equal(result.name, "Full house");
   assert.deepEqual(result.score, [6, 14, 13]);
+});
+
+test("all 2,598,960 five-card combinations match canonical category counts", () => {
+  const deck = shuffledDeck(seededRandom(2026));
+  const counts = Array.from({ length: 9 }, () => 0);
+  for (let a = 0; a < 48; a += 1)
+    for (let b = a + 1; b < 49; b += 1)
+      for (let c = b + 1; c < 50; c += 1)
+        for (let d = c + 1; d < 51; d += 1)
+          for (let e = d + 1; e < 52; e += 1) counts[evaluateHand([deck[a], deck[b], deck[c], deck[d], deck[e]]).score[0]] += 1;
+  assert.deepEqual(counts, [1_302_540, 1_098_240, 123_552, 54_912, 10_200, 5_108, 3_744, 624, 40]);
 });
 
 test("button and named positions rotate every hand", () => {
@@ -102,12 +117,38 @@ test("heads-up play uses dealer-small-blind and big-blind rules", () => {
   state.status = "handOver";
   const next = startHand(state, seededRandom(44));
   const dealer = next.dealer;
-  const bigBlind = next.players.findIndex((player) => player.position === "BB");
+  const bigBlind = next.players.findIndex((player) => player.stack > 0 && player.position === "BB");
   assert.equal(next.players[dealer].position, "BTN/SB");
   assert.equal(next.players[dealer].streetBet, 1);
   assert.equal(next.players[bigBlind].streetBet, 2);
   assert.equal(next.currentActor, dealer);
   assert.equal(next.players.filter((player) => player.hole.length === 2).length, 2);
+});
+
+test("the three-to-two transition never assigns the same player the big blind twice", () => {
+  for (const bustedPosition of ["BTN", "SB", "BB"] as Position[]) {
+    const state = createSession(seededRandom(430 + bustedPosition.length));
+    const busted = 0;
+    const other = 1;
+    const remainingPositions = (["BTN", "SB", "BB"] as Position[]).filter((position) => position !== bustedPosition);
+    state.players.forEach((player, index) => {
+      player.stack = [busted, other, humanSeat].includes(index) ? 200 : 0;
+      if (![busted, other, humanSeat].includes(index)) player.hole = [];
+    });
+    state.players[busted].position = bustedPosition;
+    state.players[other].position = remainingPositions[0];
+    state.players[humanSeat].position = remainingPositions[1];
+    state.dealer = [busted, other, humanSeat].find((index) => state.players[index].position === "BTN")!;
+    const priorBigBlind = state.players.findIndex((player) => player.stack > 0 && player.position === "BB");
+    state.players[busted].stack = 0;
+    const start = CLOCKWISE_SEATS.indexOf(priorBigBlind as (typeof CLOCKWISE_SEATS)[number]);
+    const expectedBigBlind = Array.from({ length: 6 }, (_, offset) => CLOCKWISE_SEATS[(start + offset + 1) % 6])
+      .find((index) => state.players[index].stack > 0)!;
+    state.status = "handOver";
+    const next = startHand(state, seededRandom(440 + bustedPosition.length));
+    assert.equal(next.players[expectedBigBlind].position, "BB", `${bustedPosition} busted`);
+    if (state.players[priorBigBlind].stack > 0) assert.notEqual(next.players[priorBigBlind].position, "BB", `${bustedPosition} busted`);
+  }
 });
 
 test("the table closes when the user is the only player remaining", () => {
@@ -215,6 +256,15 @@ test("an all-in cannot bypass a short-raise lock when action is not reopened", (
   assert.equal(unchanged, state);
 });
 
+test("the action validator explains illegal checks and malformed raises without mutation", () => {
+  const state = createSession(seededRandom(70));
+  const actor = state.currentActor;
+  assert.match(validateAction(state, actor, { type: "check" }).reason, /facing/i);
+  assert.match(validateAction(state, actor, { type: "raise", amount: state.currentBet }).reason, /must exceed/i);
+  assert.match(validateAction(state, actor, { type: "raise", amount: Number.NaN }).reason, /finite/i);
+  assert.strictEqual(applyAction(state, actor, { type: "raise", amount: state.currentBet }), state);
+});
+
 test("an all-in runout burns once before every community-card street", () => {
   let state = createSession();
   state.currentActor = 3;
@@ -298,14 +348,14 @@ test("an unmatched wager is returned and is not described as a second showdown w
     player.actedAtBet = null;
     player.streetBet = 0;
     player.committed = index === 0 ? 100 : index === 1 ? 101 : 0;
-    player.stack = 0;
+    player.stack = 1;
   });
   state.players[0].hole = [card("A", "spades"), card("K", "hearts")];
   state.players[1].hole = [card("7", "clubs"), card("6", "hearts")];
   state = applyAction(state, 0, { type: "check" });
   state = applyAction(state, 1, { type: "check" });
-  assert.equal(state.players[0].stack, 200);
-  assert.equal(state.players[1].stack, 1);
+  assert.equal(state.players[0].stack, 201);
+  assert.equal(state.players[1].stack, 2);
   assert.equal(state.result, `${state.players[0].name} · One pair · $200 awarded · $1 returned to ${state.players[1].name}`);
 });
 
@@ -512,6 +562,81 @@ test("BB defends materially wider against SB than against UTG", () => {
   assert.ok(versusSb > versusUtg + 0.16, `SB ${versusSb}, UTG ${versusUtg}`);
 });
 
+test("short-stack JJ reshoves from the BB against an SB min-raise for every profile", () => {
+  const state = createSession(seededRandom(902));
+  const actor = state.players.findIndex((player) => player.position === "BB");
+  const opener = state.players.findIndex((player) => player.position === "SB");
+  state.players.forEach((player, index) => { player.folded = index !== actor && index !== opener; });
+  state.currentActor = actor;
+  state.currentBet = 4;
+  state.minRaise = 2;
+  state.raiseCount = 1;
+  state.preflopRaises = 1;
+  state.preflopOpener = opener;
+  state.preflopAggressor = opener;
+  state.lastAggressor = opener;
+  state.players[opener].streetBet = 4;
+  state.players[opener].stack = 196;
+  state.players[actor].streetBet = 2;
+  state.players[actor].stack = 18;
+  state.players[actor].hole = [card("J", "diamonds"), card("J", "clubs")];
+  state.actionLog = [{ street: "preflop", seat: opener, type: "raise", amount: 4, toCallBefore: 1, raiseLevel: 0 }];
+  assert.equal(startingHandKey(state.players[actor].hole), "JJ");
+  assert.equal(analyzePreflopSpot(state, actor)?.preferred, "all-in");
+  for (const profile of ["balanced", "tag", "lag", "nit", "caller"] as BotProfile[]) {
+    state.players[actor].profile = profile;
+    assert.equal(decideBot(state, actor, seededRandom(1)).type, "all-in", profile);
+  }
+});
+
+test("short-stack coaching uses the same chart and explains the recommendation", () => {
+  const state = createSession(seededRandom(904));
+  const opener = state.players.findIndex((player) => player.position === "SB");
+  state.players.forEach((player, index) => { player.folded = index !== humanSeat && index !== opener; });
+  state.players[humanSeat].position = "BB";
+  state.players[humanSeat].hole = [card("J", "hearts"), card("J", "spades")];
+  state.players[humanSeat].streetBet = 2;
+  state.players[humanSeat].stack = 18;
+  state.players[opener].streetBet = 4;
+  state.players[opener].stack = 196;
+  state.currentActor = humanSeat;
+  state.currentBet = 4;
+  state.minRaise = 2;
+  state.raiseCount = 1;
+  state.preflopRaises = 1;
+  state.preflopOpener = opener;
+  state.preflopAggressor = opener;
+  state.actionLog = [{ street: "preflop", seat: opener, type: "raise", amount: 4, toCallBefore: 1, raiseLevel: 0 }];
+  const next = applyAction(state, humanSeat, { type: "all-in" });
+  assert.equal(next.reviews[0].suggestion, "Move all-in");
+  assert.equal(next.reviews[0].grade, "Strong");
+  assert.equal(next.reviews[0].confidence, "High");
+  assert.match(next.reviews[0].basis!, /JJ · 10 BB effective/);
+});
+
+test("deep-stack coaching uses position-specific starting-hand ranges", () => {
+  const state = createSession(seededRandom(905));
+  state.currentActor = humanSeat;
+  state.players[humanSeat].position = "HJ";
+  state.players[humanSeat].hole = [card("A", "hearts"), card("A", "spades")];
+  const next = applyAction(state, humanSeat, { type: "raise", amount: 6 });
+  assert.equal(next.reviews[0].suggestion, "Raise");
+  assert.equal(next.reviews[0].grade, "Strong");
+  assert.match(next.reviews[0].basis!, /AA · 100 BB effective/);
+  assert.match(next.reviews[0].note, /HJ opening range/);
+});
+
+test("the stack-aware overlay leaves deep-stack predecessor decisions unchanged", () => {
+  const random = seededRandom(903);
+  for (let run = 0; run < 300; run += 1) {
+    const state = createSession(random);
+    const actor = state.currentActor;
+    state.players[actor].hole = shuffledDeck(random).slice(0, 2);
+    const seed = 20_000 + run;
+    assert.deepEqual(decideBot(state, actor, seededRandom(seed)), decideBotV7(state, actor, seededRandom(seed)));
+  }
+});
+
 test("legacy saves preserve bankroll and statistics while starting a clean upgraded hand", () => {
   const state = createSession(seededRandom(55));
   state.players[5].stack = 173;
@@ -591,6 +716,7 @@ test("preflop bot populations have distinct realistic frequencies and escalation
       const player = state.players[actor];
       const level = state.raiseCount;
       const action = decideBot(state, actor, random);
+      assert.equal(validateAction(state, actor, action).legal, true, `illegal preflop action in hand ${hand}`);
       const metrics = profiles.get(player.profile) ?? { hands: 0, vpip: 0, pfr: 0, threeBetOpportunities: 0, threeBets: 0 };
       profiles.set(player.profile, metrics);
       if (level === 0) {
@@ -659,6 +785,7 @@ test("postflop profiles separate calling, folding, and aggression without extrem
       const actor = state.currentActor;
       const player = state.players[actor];
       const action = decideBot(state, actor, random);
+      assert.equal(validateAction(state, actor, action).legal, true, `illegal action in hand ${hand}`);
       if (state.street !== "preflop") {
         const profile = metrics.get(player.profile) ?? { actions: 0, facing: 0, folds: 0, aggressive: 0 };
         profile.actions += 1;
