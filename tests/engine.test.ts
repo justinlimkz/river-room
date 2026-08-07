@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyAction,
+  buildBotContext,
   cardLabel,
   CLOCKWISE_SEATS,
   createSession,
   decideBot,
+  decideBotLegacy,
   evaluateHand,
   legalBounds,
+  migrateSavedState,
   potTotal,
   seededRandom,
   shuffledDeck,
@@ -74,9 +77,18 @@ test("folding around awards the blinds without losing chips", () => {
   const totalBefore = state.players.reduce((sum, player) => sum + player.stack, 0) + state.players.reduce((sum, player) => sum + player.committed, 0);
   for (const seat of [3, 5, 4, 0, 1]) state = applyAction(state, seat, { type: "fold" });
   assert.equal(state.status, "handOver");
-  assert.match(state.result, /wins \$3 uncontested/);
+  assert.match(state.result, /wins \$1 uncontested/);
   const totalAfter = state.players.reduce((sum, player) => sum + player.stack, 0) + state.players.reduce((sum, player) => sum + player.committed, 0);
   assert.equal(totalAfter, totalBefore);
+});
+
+test("an uncontested result reports net profit and uses human grammar", () => {
+  let state = createSession(seededRandom(9));
+  state = applyAction(state, 3, { type: "fold" });
+  state = applyAction(state, 5, { type: "raise", amount: 8 });
+  for (const seat of [4, 0, 1, 2]) state = applyAction(state, seat, { type: "fold" });
+  assert.equal(state.result, "You win $3 uncontested");
+  assert.equal(state.players[5].stack, 203);
 });
 
 test("preflop action proceeds clockwise from the big blind and burns before the flop", () => {
@@ -219,7 +231,31 @@ test("showdown summary does not repeat a winner for each side-pot layer", () => 
   state = applyAction(state, 1, { type: "check" });
   state = applyAction(state, 2, { type: "check" });
   assert.equal((state.result.match(/Full house/g) ?? []).length, 1);
-  assert.equal(state.result, `${state.players[0].name} · Full house · $120 awarded`);
+  assert.equal(state.result, `${state.players[0].name} · Full house · $100 awarded · $20 returned to ${state.players[0].name}`);
+});
+
+test("an unmatched wager is returned and is not described as a second showdown winner", () => {
+  let state = createSession();
+  state.street = "river";
+  state.board = [card("A", "clubs"), card("7", "diamonds"), card("4", "hearts"), card("2", "spades"), card("J", "clubs")];
+  state.currentBet = 0;
+  state.currentActor = 0;
+  state.players.forEach((player, index) => {
+    player.folded = index > 1;
+    player.allIn = false;
+    player.acted = index > 1;
+    player.actedAtBet = null;
+    player.streetBet = 0;
+    player.committed = index === 0 ? 100 : index === 1 ? 101 : 0;
+    player.stack = 0;
+  });
+  state.players[0].hole = [card("A", "spades"), card("K", "hearts")];
+  state.players[1].hole = [card("7", "clubs"), card("6", "hearts")];
+  state = applyAction(state, 0, { type: "check" });
+  state = applyAction(state, 1, { type: "check" });
+  assert.equal(state.players[0].stack, 200);
+  assert.equal(state.players[1].stack, 1);
+  assert.equal(state.result, `${state.players[0].name} · One pair · $200 awarded · $1 returned to ${state.players[1].name}`);
 });
 
 test("an odd chip in a tied pot goes to the first winner left of the button", () => {
@@ -253,6 +289,82 @@ test("bot decisions do not change when forbidden opponent cards change", () => {
     if (index !== actor) player.hole = [card("2", "clubs"), card("3", "diamonds")];
   });
   assert.deepEqual(decideBot(state, actor, seededRandom(7)), decideBot(altered, actor, seededRandom(7)));
+});
+
+test("the new strategy remains behaviorally distinct from the frozen legacy benchmark", () => {
+  const state = createSession(seededRandom(18));
+  const actor = 2;
+  const opener = 1;
+  state.currentActor = actor;
+  state.currentBet = 6;
+  state.minRaise = 4;
+  state.raiseCount = 1;
+  state.preflopRaises = 1;
+  state.preflopOpener = opener;
+  state.preflopAggressor = opener;
+  state.lastAggressor = opener;
+  state.players[actor].position = "BB";
+  state.players[actor].streetBet = 2;
+  state.players[actor].hole = [card("K", "clubs"), card("7", "diamonds")];
+  state.players[opener].position = "SB";
+  state.players[opener].streetBet = 6;
+  assert.equal(decideBot(state, actor, seededRandom(4)).type, "call");
+  assert.equal(decideBotLegacy(state, actor, seededRandom(4)).type, "fold");
+});
+
+test("postflop position is computed relative to live opponents, including BB versus SB", () => {
+  const state = createSession(seededRandom(21));
+  state.street = "flop";
+  state.board = [card("A", "clubs"), card("7", "diamonds"), card("2", "spades")];
+  const sb = state.players.findIndex((player) => player.position === "SB");
+  const bb = state.players.findIndex((player) => player.position === "BB");
+  state.players.forEach((player, index) => { player.folded = index !== sb && index !== bb; });
+  assert.equal(buildBotContext(state, bb).inPosition, true);
+  assert.equal(buildBotContext(state, sb).inPosition, false);
+});
+
+test("BB defends materially wider against SB than against UTG", () => {
+  const random = seededRandom(7012);
+  const sample = (openerPosition: Position) => {
+    const state = createSession(seededRandom(44));
+    const actor = 2;
+    const opener = 3;
+    state.currentActor = actor;
+    state.currentBet = 6;
+    state.minRaise = 4;
+    state.raiseCount = 1;
+    state.preflopRaises = 1;
+    state.preflopOpener = opener;
+    state.preflopAggressor = opener;
+    state.lastAggressor = opener;
+    state.players[actor].position = "BB";
+    state.players[actor].streetBet = 2;
+    state.players[opener].position = openerPosition;
+    state.players[opener].streetBet = 6;
+    let continues = 0;
+    for (let run = 0; run < 5000; run += 1) {
+      state.players[actor].hole = shuffledDeck(random).slice(0, 2);
+      if (decideBot(state, actor, random).type !== "fold") continues += 1;
+    }
+    return continues / 5000;
+  };
+  const versusUtg = sample("UTG");
+  const versusSb = sample("SB");
+  assert.ok(versusSb > versusUtg + 0.16, `SB ${versusSb}, UTG ${versusUtg}`);
+});
+
+test("legacy saves preserve bankroll and statistics while starting a clean upgraded hand", () => {
+  const state = createSession(seededRandom(55));
+  state.players[5].stack = 173;
+  state.players[5].committed = 7;
+  state.players[5].stats.vpip = 12;
+  const legacy = { ...state, version: 4 };
+  const migrated = migrateSavedState(legacy);
+  assert.ok(migrated);
+  assert.equal(migrated.version, 5);
+  assert.equal(migrated.status, "handOver");
+  assert.equal(migrated.players[5].stack, 180);
+  assert.equal(migrated.players[5].stats.vpip, 12);
 });
 
 test("preflop bot populations have distinct realistic frequencies and escalation", () => {

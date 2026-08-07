@@ -9,6 +9,7 @@ import {
   evaluateHand,
   humanSeat,
   isValidSavedState,
+  migrateSavedState,
   legalBounds,
   potTotal,
   startHand,
@@ -19,7 +20,8 @@ import {
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v4";
+const STORAGE_KEY = "riverroom-session-v5";
+const LEGACY_STORAGE_KEY = "riverroom-session-v4";
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 
@@ -73,7 +75,7 @@ function ReviewPanel({ state, onClose }: { state: HandState; onClose: () => void
                 <div className="review-item-top"><span>{item.street} · {item.position}</span><b className={`grade ${item.grade.toLowerCase()}`}>{item.grade}</b></div>
                 <div className="review-metrics">
                   <div><small>Your action</small><strong>{item.action}</strong></div>
-                  <div><small>Est. equity</small><strong>{Math.round(item.equity * 100)}%</strong></div>
+                  <div><small>{item.equityLabel ?? (item.street === "preflop" ? "Hand percentile" : "Equity vs ranges")}</small><strong>{Math.round(item.equity * 100)}%</strong></div>
                   <div><small>Pot odds</small><strong>{Math.round(item.potOdds * 100)}%</strong></div>
                 </div>
                 <p><strong>Better line: {item.suggestion}.</strong> {item.note}</p>
@@ -100,11 +102,13 @@ export default function PokerTable() {
 
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
       const parsed: unknown = saved ? JSON.parse(saved) : null;
-      queueMicrotask(() => setState(isValidSavedState(parsed) ? parsed : createSession()));
+      const restored = isValidSavedState(parsed) ? parsed : migrateSavedState(parsed);
+      queueMicrotask(() => setState(restored ?? createSession()));
     } catch {
       localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
       queueMicrotask(() => setState(createSession()));
     }
   }, []);
@@ -146,6 +150,7 @@ export default function PokerTable() {
 
   const reset = () => {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
     setRaiseTo(null);
     setReviewOpen(false);
     setState(createSession());
