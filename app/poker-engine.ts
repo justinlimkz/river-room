@@ -20,7 +20,7 @@ export type Seat = {
   folded: boolean;
   allIn: boolean;
   acted: boolean;
-  raiseLocked: boolean;
+  actedAtBet: number | null;
   voluntaryPreflop: boolean;
   raisedPreflop: boolean;
   lastAction: string;
@@ -44,7 +44,7 @@ export type ReviewItem = {
 };
 
 export type HandState = {
-  version: 2;
+  version: 3;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -126,7 +126,7 @@ function baseSeat(index: number): Seat {
     folded: false,
     allIn: false,
     acted: false,
-    raiseLocked: false,
+    actedAtBet: null,
     voluntaryPreflop: false,
     raisedPreflop: false,
     lastAction: "",
@@ -167,7 +167,7 @@ function pay(player: Seat, amount: number) {
 
 export function createSession(): HandState {
   return startHand({
-    version: 2,
+    version: 3,
     handNumber: 0,
     dealer: 4,
     street: "preflop",
@@ -196,7 +196,7 @@ export function startHand(previous: HandState): HandState {
     folded: false,
     allIn: false,
     acted: false,
-    raiseLocked: false,
+    actedAtBet: null,
     voluntaryPreflop: false,
     raisedPreflop: false,
     lastAction: "",
@@ -237,7 +237,7 @@ export function startHand(previous: HandState): HandState {
     players,
     currentBet: 2,
     minRaise: 2,
-    currentActor: (bb + 1) % 6,
+    currentActor: clockwiseSeat(bb),
     status: "playing",
     history: [`Hand #${previous.handNumber + 1} · $1/$2 No-Limit Hold’em`],
     reviews: [],
@@ -250,7 +250,8 @@ export function legalBounds(state: HandState, seat: number) {
   const player = state.players[seat];
   const max = player.streetBet + player.stack;
   const min = Math.min(max, state.currentBet + state.minRaise);
-  return { toCall: toCallFor(state, seat), min, max, canRaise: max > state.currentBet && !player.raiseLocked };
+  const actionReopened = player.actedAtBet === null || state.currentBet - player.actedAtBet >= state.minRaise;
+  return { toCall: toCallFor(state, seat), min, max, canRaise: max > state.currentBet && actionReopened };
 }
 
 function activePlayers(state: HandState) {
@@ -276,13 +277,16 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
   if (action.type === "fold") {
     player.folded = true;
     player.acted = true;
+    player.actedAtBet = state.currentBet;
     player.lastAction = "Fold";
   } else if (action.type === "check" && beforeToCall === 0) {
     player.acted = true;
+    player.actedAtBet = state.currentBet;
     player.lastAction = "Check";
   } else if (action.type === "call" && beforeToCall > 0) {
     const paid = pay(player, beforeToCall);
     player.acted = true;
+    player.actedAtBet = state.currentBet;
     player.lastAction = paid < beforeToCall ? `All-in $${player.streetBet}` : `Call $${paid}`;
     if (state.street === "preflop" && paid > 0 && !player.voluntaryPreflop) {
       player.stats.vpip += 1;
@@ -291,6 +295,7 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
   } else if (action.type === "all-in" || action.type === "raise") {
     let target = action.type === "all-in" ? bounds.max : Math.round(action.amount ?? bounds.min);
     target = Math.max(player.streetBet, Math.min(bounds.max, target));
+    if (target > state.currentBet && !bounds.canRaise) return input;
     if (target <= state.currentBet && target < bounds.max) return input;
     if (target > state.currentBet && target < bounds.min && target !== bounds.max) return input;
     const paid = pay(player, target - player.streetBet);
@@ -302,15 +307,11 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
       state.players.forEach((other, index) => {
         if (index !== seatIndex && !other.folded && !other.allIn) {
           other.acted = false;
-          other.raiseLocked = false;
         }
-      });
-    } else if (target > oldCurrentBet) {
-      state.players.forEach((other, index) => {
-        if (index !== seatIndex && other.acted && !other.folded && !other.allIn) other.raiseLocked = true;
       });
     }
     player.acted = true;
+    player.actedAtBet = state.currentBet;
     player.lastAction = player.allIn ? `All-in $${target}` : `${oldCurrentBet === 0 ? "Bet" : "Raise"} to $${target}`;
     if (state.street === "preflop") {
       if (!player.voluntaryPreflop) {
@@ -361,10 +362,11 @@ function advanceStreet(state: HandState): HandState {
   state.players.forEach((player) => {
     player.streetBet = 0;
     player.acted = player.folded || player.allIn;
-    player.raiseLocked = false;
+    player.actedAtBet = null;
   });
   state.currentBet = 0;
   state.minRaise = 2;
+  state.deck.pop(); // One burn card before every community-card street.
   const count = state.street === "flop" ? 3 : 1;
   for (let card = 0; card < count; card += 1) state.board.push(state.deck.pop()!);
   append(state, `${state.street[0].toUpperCase()}${state.street.slice(1)} · ${state.board.map(cardLabel).join(" ")}`);
@@ -377,7 +379,9 @@ function advanceStreet(state: HandState): HandState {
 
 function runOut(state: HandState): HandState {
   while (state.board.length < 5) {
-    state.board.push(state.deck.pop()!);
+    state.deck.pop();
+    const count = state.board.length === 0 ? 3 : 1;
+    for (let card = 0; card < count; card += 1) state.board.push(state.deck.pop()!);
   }
   state.street = "river";
   append(state, `Runout · ${state.board.map(cardLabel).join(" ")}`);
@@ -414,7 +418,7 @@ function rankFive(cards: Card[]) {
   for (let i = 0; i <= unique.length - 5; i += 1) if (unique[i] - unique[i + 4] === 4) straightHigh = Math.max(straightHigh, unique[i]);
   if (flush && straightHigh) return { score: [8, straightHigh], name: straightHigh === 14 ? "Royal flush" : "Straight flush" };
   if (groups[0][1] === 4) return { score: [7, groups[0][0], groups[1][0]], name: "Four of a kind" };
-  if (groups[0][1] === 3 && groups[1][1] === 2) return { score: [6, groups[0][0], groups[1][0]], name: "Full house" };
+  if (groups[0][1] === 3 && groups[1][1] >= 2) return { score: [6, groups[0][0], groups[1][0]], name: "Full house" };
   if (flush) return { score: [5, ...values], name: "Flush" };
   if (straightHigh) return { score: [4, straightHigh], name: "Straight" };
   if (groups[0][1] === 3) return { score: [3, groups[0][0], ...groups.slice(1).map(([value]) => value).sort((a, b) => b - a)], name: "Three of a kind" };
@@ -434,7 +438,7 @@ function showdown(state: HandState): HandState {
   const contributions = [...new Set(state.players.map((player) => player.committed).filter(Boolean))].sort((a, b) => a - b);
   let previous = 0;
   const awards = new Map<number, number>();
-  const descriptions: string[] = [];
+  const descriptions = new Set<string>();
   contributions.forEach((level) => {
     const contributors = state.players.filter((player) => player.committed >= level);
     const eligible = contributors.filter((player) => !player.folded);
@@ -450,14 +454,14 @@ function showdown(state: HandState): HandState {
     clockwise.forEach(({ player }) => {
       awards.set(state.players.indexOf(player), (awards.get(state.players.indexOf(player)) ?? 0) + share + (odd-- > 0 ? 1 : 0));
     });
-    descriptions.push(`${winners.map(({ player }) => player.name).join(" & ")} · ${best.result.name}`);
+    descriptions.add(`${winners.map(({ player }) => player.name).join(" & ")} · ${best.result.name}`);
   });
   awards.forEach((amount, index) => { state.players[index].stack += amount; });
   const total = potTotal(state);
   state.players.forEach((player) => { player.committed = 0; player.streetBet = 0; });
   state.status = state.players[humanSeat].stack <= 0 ? "busted" : "handOver";
   state.currentActor = -1;
-  state.result = `${descriptions.join(" · ")} · $${total} awarded`;
+  state.result = `${[...descriptions].join(" · ")} · $${total} awarded`;
   append(state, state.result);
   return state;
 }
@@ -576,5 +580,5 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 2 && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
+  return candidate.version === 3 && Array.isArray(candidate.players) && candidate.players.length === 6 && Array.isArray(candidate.deck) && Array.isArray(candidate.board);
 }

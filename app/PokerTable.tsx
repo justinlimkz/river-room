@@ -19,7 +19,7 @@ import {
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v2";
+const STORAGE_KEY = "riverroom-session-v3";
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 
@@ -34,7 +34,7 @@ function PlayingCard({ card, hidden = false, small = false }: { card?: Card; hid
 }
 
 function SeatView({ player, index, state }: { player: Seat; index: number; state: HandState }) {
-  const showCards = player.isHuman || (state.status !== "playing" && !player.folded);
+  const showCards = player.isHuman || (state.status !== "playing" && !player.folded && !state.result.includes("uncontested"));
   const active = state.currentActor === index;
   return (
     <section className={`${SEAT_CLASS[index]} ${player.folded ? "folded" : ""} ${active ? "active" : ""}`} aria-label={`${player.name}, ${player.position}`}>

@@ -90,7 +90,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #9cf0c5; outline-
 .top-left .wager, .top-center .wager, .top-right .wager { top: 90px; left: 50%; }
 .mid-left .wager { left: 150px; top: 25px; }
 .mid-right .wager { right: 150px; top: 25px; }
-.hero .wager { bottom: 90px; left: 50%; }
+.hero .wager { bottom: 77px; left: auto; right: -46px; z-index: 4; padding: 5px 8px; border: 1px solid rgba(209,173,106,.4); border-radius: 999px; background: #091411; color: #f0d79f; box-shadow: 0 5px 14px rgba(0,0,0,.55); }
 .dealer { right: -27px; top: 15px; }
 
 .status-strip { width: min(960px, 100%); margin: 0 auto; border: 1px solid var(--line); border-radius: 9px; min-height: 54px; padding: 9px 14px; display: flex; align-items: center; justify-content: space-between; background: rgba(10,16,14,.72); }
@@ -123,6 +123,8 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
 .between-hands p { margin: 0; color: var(--muted); font-size: 10px; }
 .between-hands > div:last-child { display: flex; gap: 7px; }
 .between-hands button { min-width: 130px; min-height: 40px; }
+.between-hands .primary { background: #e5bf76; color: #0b100d; border-color: #f2d79e; font-weight: 750; text-shadow: 0 1px 0 rgba(255,255,255,.18); }
+.between-hands .primary:hover { background: #f0cf8d; color: #070a08; }
 
 .history-panel { border-left: 1px solid var(--line); background: rgba(10,15,13,.88); padding: 22px 18px; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .aside-header { display: flex; justify-content: space-between; align-items: flex-start; }
