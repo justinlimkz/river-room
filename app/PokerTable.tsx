@@ -39,7 +39,7 @@ function SeatView({ player, index, state }: { player: Seat; index: number; state
   return (
     <section className={`${SEAT_CLASS[index]} ${player.folded ? "folded" : ""} ${active ? "active" : ""}`} aria-label={`${player.name}, ${player.position}`}>
       <div className="seat-cards" aria-hidden={!showCards}>
-        {player.hole.map((card, cardIndex) => <PlayingCard key={cardIndex} card={card} hidden={!showCards} small />)}
+        {player.hole.map((card, cardIndex) => <PlayingCard key={cardIndex} card={card} hidden={!showCards} small={!player.isHuman} />)}
       </div>
       <div className="seat-panel">
         <div className="seat-topline"><strong>{player.name}</strong><span className="position">{player.position}</span></div>
