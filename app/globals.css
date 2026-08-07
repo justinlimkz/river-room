@@ -124,10 +124,10 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
 .between-hands > div:last-child { display: flex; gap: 7px; }
 .between-hands button { min-width: 130px; min-height: 40px; }
 
-.history-panel { border-left: 1px solid var(--line); background: rgba(10,15,13,.88); padding: 22px 18px; display: flex; flex-direction: column; min-width: 0; }
+.history-panel { border-left: 1px solid var(--line); background: rgba(10,15,13,.88); padding: 22px 18px; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .aside-header { display: flex; justify-content: space-between; align-items: flex-start; }
 .aside-header h2 { font: 500 20px Georgia, serif; margin: 4px 0 0; }
-.history-list { flex: 1; min-height: 0; overflow-y: auto; margin: 17px -5px 14px 0; padding-right: 8px; }
+.history-list { flex: 1 1 0; min-height: 0; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; margin: 17px -5px 14px 0; padding-right: 8px; }
 .history-list > div { display: grid; grid-template-columns: 22px 1fr; gap: 8px; padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,.055); }
 .history-list span { color: #536059; font: 600 8px var(--font-geist-mono); margin-top: 2px; }
 .history-list p { font-size: 10px; color: #9ba59f; margin: 0; line-height: 1.35; }
