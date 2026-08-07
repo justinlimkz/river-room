@@ -1,7 +1,7 @@
 export type Suit = "clubs" | "diamonds" | "hearts" | "spades";
 export type Rank = "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "T" | "J" | "Q" | "K" | "A";
 export type Card = { rank: Rank; suit: Suit };
-export type Position = "BTN" | "SB" | "BB" | "UTG" | "HJ" | "CO";
+export type Position = "BTN" | "BTN/SB" | "SB" | "BB" | "UTG" | "HJ" | "CO";
 export type Street = "preflop" | "flop" | "turn" | "river";
 export type ActionKind = "fold" | "check" | "call" | "raise" | "all-in";
 export type BotProfile = "balanced" | "tag" | "lag" | "nit" | "caller";
@@ -88,7 +88,7 @@ export type HandState = {
   lastAggressor: number | null;
   actionLog: PublicAction[];
   currentActor: number;
-  status: "playing" | "handOver" | "busted";
+  status: "playing" | "handOver" | "busted" | "tableClosed";
   history: string[];
   reviews: ReviewItem[];
   result: string;
@@ -214,9 +214,20 @@ function nextSeat(start: number, predicate: (seat: number) => boolean) {
   return -1;
 }
 
-function clockwiseSeat(start: number, steps = 1) {
-  const startPosition = CLOCKWISE_SEATS.indexOf(start as (typeof CLOCKWISE_SEATS)[number]);
-  return CLOCKWISE_SEATS[(startPosition + steps) % 6];
+function seatedSeats(players: Seat[]) {
+  return CLOCKWISE_SEATS.filter((seat) => players[seat].stack > 0);
+}
+
+function nextSeatedSeat(start: number, players: Seat[]) {
+  return nextSeat(start, (seat) => players[seat].stack > 0);
+}
+
+function positionsForTable(size: number): Position[] {
+  if (size === 5) return ["BTN", "SB", "BB", "UTG", "CO"];
+  if (size === 4) return ["BTN", "SB", "BB", "CO"];
+  if (size === 3) return ["BTN", "SB", "BB"];
+  if (size === 2) return ["BTN/SB", "BB"];
+  return POSITIONS;
 }
 
 function clockwiseDistance(start: number, target: number) {
@@ -265,40 +276,54 @@ export function createSession(random: () => number = cryptoRandom): HandState {
 export function startHand(previous: HandState, random: () => number = cryptoRandom): HandState {
   const players = previous.players.map((old, index) => ({
     ...old,
-    stack: index !== humanSeat && old.stack <= 0 ? 200 : old.stack,
     streetBet: 0,
     committed: 0,
     hole: [] as Card[],
-    folded: false,
-    allIn: false,
+    folded: old.stack <= 0,
+    allIn: old.stack <= 0,
     acted: false,
     actedAtBet: null,
     voluntaryPreflop: false,
     raisedPreflop: false,
-    lastAction: "",
-    stats: { ...old.stats, hands: old.stats.hands + 1 },
+    lastAction: old.stack <= 0 && index !== humanSeat ? "Seat open" : "",
+    stats: { ...old.stats, hands: old.stats.hands + (old.stack > 0 ? 1 : 0) },
   }));
   if (players[humanSeat].stack <= 0) return { ...previous, players, status: "busted", result: "Your stack is gone. Review the session, then reset when you’re ready." };
 
-  const dealer = clockwiseSeat(previous.dealer);
-  const dealerPosition = CLOCKWISE_SEATS.indexOf(dealer as (typeof CLOCKWISE_SEATS)[number]);
-  players.forEach((player, index) => {
-    const seatPosition = CLOCKWISE_SEATS.indexOf(index as (typeof CLOCKWISE_SEATS)[number]);
-    const offset = (seatPosition - dealerPosition + 6) % 6;
-    player.position = POSITIONS[offset];
+  const seated = seatedSeats(players);
+  if (seated.length < 2) {
+    players.forEach((player, index) => {
+      player.stats.hands = previous.players[index].stats.hands;
+    });
+    return {
+      ...previous,
+      players,
+      currentActor: -1,
+      status: "tableClosed",
+      result: "The table has closed — no opponents remain.",
+    };
+  }
+
+  const dealer = nextSeatedSeat(previous.dealer, players);
+  const positions = positionsForTable(seated.length);
+  let positionSeat = dealer;
+  positions.forEach((position, offset) => {
+    if (offset > 0) positionSeat = nextSeatedSeat(positionSeat, players);
+    players[positionSeat].position = position;
   });
   const deck = shuffledDeck(random);
   const dealOrder: number[] = [];
   let cursor = dealer;
-  for (let count = 0; count < 6; count += 1) {
-    cursor = clockwiseSeat(cursor);
+  for (let count = 0; count < seated.length; count += 1) {
+    cursor = nextSeatedSeat(cursor, players);
     dealOrder.push(cursor);
   }
   for (let round = 0; round < 2; round += 1) {
     dealOrder.forEach((seat) => players[seat].hole.push(deck.pop()!));
   }
-  const sb = clockwiseSeat(dealer);
-  const bb = clockwiseSeat(dealer, 2);
+  const headsUp = seated.length === 2;
+  const sb = headsUp ? dealer : nextSeatedSeat(dealer, players);
+  const bb = nextSeatedSeat(sb, players);
   pay(players[sb], 1);
   pay(players[bb], 2);
   players[sb].lastAction = "SB $1";
@@ -319,7 +344,7 @@ export function startHand(previous: HandState, random: () => number = cryptoRand
     preflopAggressor: null,
     lastAggressor: null,
     actionLog: [],
-    currentActor: clockwiseSeat(bb),
+    currentActor: nextSeatedSeat(bb, players),
     status: "playing",
     history: [`Hand #${previous.handNumber + 1} · $1/$2 No-Limit Hold’em`],
     reviews: [],
@@ -881,7 +906,7 @@ const PROFILE = {
   caller: { openFactor: 1.28, openRaise: 0.3, continueVsOpen: 0.29, threeBet: 0.028, defendVsThreeBet: 0.13, fourBet: 0.012, continueVsFourBet: 0.028, stackOff: 0.009, preflopAggression: 0.58, postflopAggression: 0.27, postflopContinue: 0.43, betThreshold: 0.68, raiseThreshold: 0.86, bluff: 0.025, callBias: 0.06 },
 };
 
-const POSITION_OPEN_RATE: Record<Position, number> = { UTG: 0.18, HJ: 0.23, CO: 0.3, BTN: 0.44, SB: 0.4, BB: 0.34 };
+const POSITION_OPEN_RATE: Record<Position, number> = { UTG: 0.18, HJ: 0.23, CO: 0.3, BTN: 0.44, "BTN/SB": 0.72, SB: 0.4, BB: 0.34 };
 
 function bluffCandidate(cards: Card[]) {
   const values = cards.map((card) => VALUES[card.rank]).sort((a, b) => b - a);
@@ -893,7 +918,7 @@ function preflopRaiseAction(state: HandState, seatIndex: number): PokerAction {
   const player = state.players[seatIndex];
   const bounds = legalBounds(state, seatIndex);
   if (state.raiseCount >= 3) return { type: "all-in" };
-  const inPosition = ["BTN", "CO"].includes(player.position);
+  const inPosition = ["BTN", "BTN/SB", "CO"].includes(player.position);
   const limpers = state.players.filter((other, index) => index !== seatIndex && other.voluntaryPreflop && !other.raisedPreflop && !other.folded).length;
   let target: number;
   if (state.raiseCount === 0) target = (player.position === "SB" ? 6 : 5) + limpers * 2;
@@ -1005,6 +1030,7 @@ const CONTINUE_VS_OPEN: Record<Position, number> = {
   HJ: 0.13,
   CO: 0.17,
   BTN: 0.215,
+  "BTN/SB": 0.31,
   SB: 0.265,
   BB: 0.2,
 };
@@ -1014,12 +1040,13 @@ const THREE_BET_VS_OPEN: Record<Position, number> = {
   HJ: 0.055,
   CO: 0.075,
   BTN: 0.1,
+  "BTN/SB": 0.13,
   SB: 0.115,
   BB: 0.075,
 };
 
 function preflopHasPosition(state: HandState, actor: number, opponent: number | null) {
-  if (opponent === null) return ["CO", "BTN"].includes(state.players[actor].position);
+  if (opponent === null) return ["CO", "BTN", "BTN/SB"].includes(state.players[actor].position);
   return actsAfterPostflop(state, actor, opponent);
 }
 
@@ -1031,7 +1058,7 @@ function contextualPreflopRaise(state: HandState, seatIndex: number): PokerActio
   const inPosition = preflopHasPosition(state, seatIndex, lastRaiser);
   let target: number;
   if (state.raiseCount === 0) {
-    const base = player.position === "SB" ? 6 : player.position === "BTN" || player.position === "CO" ? 5 : 6;
+    const base = player.position === "SB" ? 6 : player.position === "BTN" || player.position === "BTN/SB" || player.position === "CO" ? 5 : 6;
     target = base + context.limpers * 2;
   } else if (state.raiseCount === 1) {
     const multiplier = inPosition ? 3.25 : 4.15;
@@ -1066,7 +1093,7 @@ function preflopDecisionV6(state: HandState, seatIndex: number, random: () => nu
   const opener = context.opener;
   const hasPosition = preflopHasPosition(state, seatIndex, opener);
   const blindDefense = player.position === "BB"
-    ? openerPosition === "SB" ? 0.19 : openerPosition === "BTN" ? 0.105 : openerPosition === "CO" ? 0.055 : 0.015
+    ? openerPosition === "BTN/SB" ? 0.24 : openerPosition === "SB" ? 0.19 : openerPosition === "BTN" ? 0.105 : openerPosition === "CO" ? 0.055 : 0.015
     : player.position === "SB" && openerPosition === "BTN" ? 0.045 : 0;
 
   if (state.raiseCount === 1) {
@@ -1084,7 +1111,7 @@ function preflopDecisionV6(state: HandState, seatIndex: number, random: () => nu
 
   if (state.raiseCount === 2) {
     const isOriginalOpener = context.opener === seatIndex;
-    const lateOpen = openerPosition === "CO" || openerPosition === "BTN" || openerPosition === "SB";
+    const lateOpen = openerPosition === "CO" || openerPosition === "BTN" || openerPosition === "BTN/SB" || openerPosition === "SB";
     const defendRate = (isOriginalOpener ? (lateOpen ? 0.12 : 0.075) : 0.035) * response.continue * (hasPosition ? 1.15 : 0.9);
     const fourBetRate = (isOriginalOpener ? (lateOpen ? 0.033 : 0.024) : 0.017) * response.fourBet;
     const bluffFourBet = isOriginalOpener && bluffCandidate(player.hole) && random() < style.bluff * response.bluff * 0.28;
@@ -1118,7 +1145,7 @@ function preflopDecision(state: HandState, seatIndex: number, random: () => numb
     const confidence = Math.min(0.7, stats.hands / 70);
     return sum + 0.1 * (1 - confidence) + observedGap * confidence;
   }, 0) / Math.max(1, limperIndices.length);
-  const latePosition = player.position === "CO" || player.position === "BTN";
+  const latePosition = player.position === "CO" || player.position === "BTN" || player.position === "BTN/SB";
   let openRate = Math.min(0.62, POSITION_OPEN_RATE[player.position] * style.openFactor);
 
   if (limperIndices.length > 0) {

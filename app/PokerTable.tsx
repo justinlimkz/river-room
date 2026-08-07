@@ -36,6 +36,17 @@ function PlayingCard({ card, hidden = false, small = false }: { card?: Card; hid
 }
 
 function SeatView({ player, index, state }: { player: Seat; index: number; state: HandState }) {
+  const vacant = !player.isHuman && player.stack <= 0 && player.hole.length === 0;
+  if (vacant) {
+    return (
+      <section className={`${SEAT_CLASS[index]} vacant`} aria-label="Open seat">
+        <div className="seat-panel vacant-panel">
+          <div className="seat-topline"><strong>Open seat</strong></div>
+          <div className="seat-action">Player left</div>
+        </div>
+      </section>
+    );
+  }
   const showCards = player.isHuman || (state.status !== "playing" && !player.folded && !state.result.includes("uncontested"));
   const active = state.currentActor === index;
   return (
@@ -187,13 +198,14 @@ export default function PokerTable() {
   const heroStats = state.players[humanSeat].stats;
   const preflopDecisions = heroStats.preflopFolds + heroStats.preflopCalls + heroStats.preflopRaises;
   const postflopDecisions = heroStats.postflopFolds + heroStats.postflopCalls + heroStats.postflopRaises + heroStats.postflopChecks;
+  const seatedPlayers = state.players.filter((player) => player.stack > 0 || player.hole.length > 0).length;
   const quickRaise = (fraction: number) => Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + pot * fraction)));
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand"><span className="brand-mark">R</span><div><strong>River Room</strong><small>Hold’em trainer</small></div></div>
-        <div className="table-meta"><span>6-MAX CASH</span><b>$1 / $2 NL</b><span>100 BB BUY-IN</span></div>
+        <div className="table-meta"><span>{seatedPlayers === 6 ? "6-MAX" : `${seatedPlayers}-HANDED`} CASH</span><b>$1 / $2 NL</b><span>100 BB BUY-IN</span></div>
         <div className="header-actions">
           <button onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>Hand log</button>
           <button onClick={reset}>Reset session</button>
@@ -243,7 +255,9 @@ export default function PokerTable() {
               <div><span className="eyebrow">Hand complete</span><h2>{state.result}</h2><p>Your stack: ${state.players[humanSeat].stack} · Session: {state.sessionHands} hands</p></div>
               <div>
                 {state.reviews.length > 0 && <button onClick={() => setReviewOpen(true)}>Review decisions</button>}
-                {state.status === "busted" ? <button className="primary" onClick={reset}>Reset bankroll</button> : <button className="primary" onClick={() => setState(startHand(state))}>Deal next hand</button>}
+                {state.status === "busted" ? <button className="primary" onClick={reset}>Reset bankroll</button>
+                  : state.status === "tableClosed" ? <button className="primary" onClick={reset}>Start new table</button>
+                    : <button className="primary" onClick={() => setState(startHand(state))}>Deal next hand</button>}
               </div>
             </section>
           )}

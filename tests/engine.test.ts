@@ -12,6 +12,7 @@ import {
   estimateRangeEquity,
   estimateRangeEquityV6,
   evaluateHand,
+  humanSeat,
   legalBounds,
   migrateSavedState,
   potTotal,
@@ -73,6 +74,53 @@ test("button and named positions rotate every hand", () => {
     Array.from({ length: 6 }, (_, offset) => second.players[CLOCKWISE_SEATS[(dealerIndex + offset) % 6]].position),
     ["BTN", "SB", "BB", "UTG", "HJ", "CO"],
   );
+});
+
+test("busted bots leave an open seat instead of automatically rebuying", () => {
+  const state = createSession(seededRandom(41));
+  const busted = state.players.findIndex((player) => !player.isHuman && player.position === "CO");
+  state.players[busted].stack = 0;
+  state.status = "handOver";
+  const next = startHand(state, seededRandom(42));
+  assert.equal(next.players[busted].stack, 0);
+  assert.deepEqual(next.players[busted].hole, []);
+  assert.equal(next.players[busted].folded, true);
+  assert.equal(next.players[busted].lastAction, "Seat open");
+  assert.equal(next.players.filter((player) => player.stack > 0).length, 5);
+  assert.deepEqual(
+    next.players.filter((player) => player.stack > 0).map((player) => player.position).sort(),
+    ["BB", "BTN", "CO", "SB", "UTG"].sort(),
+  );
+});
+
+test("heads-up play uses dealer-small-blind and big-blind rules", () => {
+  const state = createSession(seededRandom(43));
+  const opponent = state.players.findIndex((player) => !player.isHuman);
+  state.players.forEach((player, index) => {
+    if (index !== humanSeat && index !== opponent) player.stack = 0;
+  });
+  state.status = "handOver";
+  const next = startHand(state, seededRandom(44));
+  const dealer = next.dealer;
+  const bigBlind = next.players.findIndex((player) => player.position === "BB");
+  assert.equal(next.players[dealer].position, "BTN/SB");
+  assert.equal(next.players[dealer].streetBet, 1);
+  assert.equal(next.players[bigBlind].streetBet, 2);
+  assert.equal(next.currentActor, dealer);
+  assert.equal(next.players.filter((player) => player.hole.length === 2).length, 2);
+});
+
+test("the table closes when the user is the only player remaining", () => {
+  const state = createSession(seededRandom(45));
+  state.players.forEach((player, index) => {
+    if (index !== humanSeat) player.stack = 0;
+  });
+  state.status = "handOver";
+  const next = startHand(state, seededRandom(46));
+  assert.equal(next.status, "tableClosed");
+  assert.equal(next.currentActor, -1);
+  assert.equal(next.players[humanSeat].stats.hands, state.players[humanSeat].stats.hands);
+  assert.match(next.result, /no opponents remain/i);
 });
 
 test("folding around awards the blinds without losing chips", () => {
