@@ -89,10 +89,13 @@ function ReviewPanel({ state, onClose }: { state: HandState; onClose: () => void
 
 export default function PokerTable() {
   const [state, setState] = useState<HandState | null>(null);
-  const [raiseTo, setRaiseTo] = useState(4);
+  const [raiseTo, setRaiseTo] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const act = (action: PokerAction) => setState((current) => current ? applyAction(current, humanSeat, action) : current);
+  const act = (action: PokerAction) => {
+    setRaiseTo(null);
+    setState((current) => current ? applyAction(current, humanSeat, action) : current);
+  };
   const heroToCall = state ? toCallFor(state, humanSeat) : 0;
 
   useEffect(() => {
@@ -113,6 +116,9 @@ export default function PokerTable() {
 
   const bounds = useMemo(() => state ? legalBounds(state, humanSeat) : { toCall: 0, min: 0, max: 0, canRaise: false }, [state]);
   const humanTurn = state?.status === "playing" && state.currentActor === humanSeat;
+  const raiseInputValue = raiseTo ?? String(bounds.min);
+  const enteredRaise = raiseInputValue.trim() === "" ? Number.NaN : Number(raiseInputValue);
+  const effectiveRaiseTo = Number.isFinite(enteredRaise) ? Math.max(bounds.min, Math.min(bounds.max, enteredRaise)) : bounds.min;
 
   useEffect(() => {
     if (!state || state.status !== "playing" || state.currentActor < 0 || state.currentActor === humanSeat) return;
@@ -130,22 +136,22 @@ export default function PokerTable() {
       if (target.tagName === "INPUT") return;
       if (event.key.toLowerCase() === "f") act({ type: "fold" });
       if (event.key.toLowerCase() === "c") act(heroToCall ? { type: "call" } : { type: "check" });
-      if (event.key.toLowerCase() === "r" && bounds.canRaise) act({ type: "raise", amount: Math.max(bounds.min, Math.min(bounds.max, raiseTo)) });
+      if (event.key.toLowerCase() === "r" && bounds.canRaise) act({ type: "raise", amount: effectiveRaiseTo });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [humanTurn, heroToCall, bounds.canRaise, bounds.min, bounds.max, raiseTo]);
+  }, [humanTurn, heroToCall, bounds.canRaise, effectiveRaiseTo]);
 
   if (!state) return <main className="loading">Shuffling the deck…</main>;
 
   const reset = () => {
     localStorage.removeItem(STORAGE_KEY);
+    setRaiseTo(null);
     setReviewOpen(false);
     setState(createSession());
   };
   const toCall = toCallFor(state, humanSeat);
   const pot = potTotal(state);
-  const effectiveRaiseTo = Math.max(bounds.min, Math.min(bounds.max, raiseTo));
   const liveHand = evaluateHand([...state.players[humanSeat].hole, ...state.board]);
   const quickRaise = (fraction: number) => Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + pot * fraction)));
 
@@ -191,11 +197,11 @@ export default function PokerTable() {
               </div>
               <div className="raise-tools">
                 <div className="quick-sizes">
-                  {[0.5, 0.75, 1].map((size) => <button key={size} disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(quickRaise(size))}>{size === 1 ? "Pot" : `${size * 100}%`}</button>)}
-                  <button disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(bounds.max)}>All-in</button>
+                  {[0.5, 0.75, 1].map((size) => <button key={size} disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(size)))}>{size === 1 ? "Pot" : `${size * 100}%`}</button>)}
+                  <button disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(bounds.max))}>All-in</button>
                 </div>
-                <input aria-label="Raise amount" type="range" min={bounds.min} max={Math.max(bounds.min, bounds.max)} value={effectiveRaiseTo} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(Number(event.target.value))} />
-                <label className="raise-input"><span>Raise to</span><b>$</b><input type="number" min={bounds.min} max={bounds.max} value={effectiveRaiseTo} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(Math.max(bounds.min, Math.min(bounds.max, Number(event.target.value))))} /></label>
+                <input aria-label="Raise amount" type="range" min={bounds.min} max={Math.max(bounds.min, bounds.max)} value={effectiveRaiseTo} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(event.target.value)} />
+                <label className="raise-input"><span>Raise to</span><b>$</b><input type="number" min={bounds.min} max={bounds.max} value={raiseInputValue} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(event.target.value)} onBlur={() => setRaiseTo(String(effectiveRaiseTo))} /></label>
               </div>
             </section>
           ) : (
