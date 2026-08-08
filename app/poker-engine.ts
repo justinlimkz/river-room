@@ -57,25 +57,37 @@ export type Seat = {
 };
 
 export type ReviewItem = {
+  id: string;
+  handNumber: number;
   street: Street;
   position: Position;
   cards: Card[];
   board: Card[];
   pot: number;
   toCall: number;
+  effectiveStack: number;
+  spr: number;
+  opponents: number;
+  actionLine: string[];
   action: string;
-  equity: number;
-  equityLabel: "Hand percentile" | "Equity vs ranges";
+  equity?: number;
+  equityLow?: number;
+  equityHigh?: number;
+  equityLabel: "Equity vs modeled ranges" | "Preflop reference";
   potOdds: number;
-  grade: "Strong" | "Reasonable" | "Questionable";
+  grade: "Preferred" | "Viable" | "Costly";
   suggestion: string;
+  concept: string;
+  takeaway: string;
+  alternatives: Array<{ action: string; verdict: "Preferred" | "Viable" | "Costly"; reason: string }>;
+  recommendedSize?: { target: number; min: number; max: number };
   note: string;
   confidence?: "High" | "Medium" | "Low";
   basis?: string;
 };
 
 export type HandState = {
-  version: 6;
+  version: 7;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -94,6 +106,7 @@ export type HandState = {
   status: "playing" | "handOver" | "busted" | "tableClosed";
   history: string[];
   reviews: ReviewItem[];
+  reviewArchive: ReviewItem[];
   result: string;
   sessionStart: number;
   sessionHands: number;
@@ -251,7 +264,7 @@ function pay(player: Seat, amount: number) {
 
 export function createSession(random: () => number = cryptoRandom): HandState {
   return startHand({
-    version: 6,
+    version: 7,
     handNumber: 0,
     dealer: 4,
     street: "preflop",
@@ -270,6 +283,7 @@ export function createSession(random: () => number = cryptoRandom): HandState {
     status: "handOver",
     history: [],
     reviews: [],
+    reviewArchive: [],
     result: "",
     sessionStart: 200,
     sessionHands: 0,
@@ -277,6 +291,9 @@ export function createSession(random: () => number = cryptoRandom): HandState {
 }
 
 export function startHand(previous: HandState, random: () => number = cryptoRandom): HandState {
+  const reviewArchive = previous.reviews.length > 0
+    ? [...(previous.reviewArchive ?? []), ...previous.reviews].slice(-120)
+    : previous.reviewArchive ?? [];
   const players = previous.players.map((old, index) => ({
     ...old,
     streetBet: 0,
@@ -337,6 +354,7 @@ export function startHand(previous: HandState, random: () => number = cryptoRand
   players[bb].lastAction = "BB $2";
   return {
     ...previous,
+    reviewArchive,
     handNumber: previous.handNumber + 1,
     dealer,
     street: "preflop",
@@ -1591,97 +1609,201 @@ export function decideBot(state: HandState, seatIndex: number, random: () => num
   return decideBotFromPublicState(publicState, seatIndex, random);
 }
 
+function reviewActionText(state: HandState, action: PokerAction) {
+  if (action.type === "raise") return `${state.currentBet === 0 ? "Bet" : "Raise"} to $${action.amount}`;
+  if (action.type === "all-in") return `All-in to $${state.players[humanSeat].stack + state.players[humanSeat].streetBet}`;
+  if (action.type === "call") return `Call $${Math.min(toCallFor(state, humanSeat), state.players[humanSeat].stack)}`;
+  return action.type[0].toUpperCase() + action.type.slice(1);
+}
+
+function reviewActionLine(state: HandState) {
+  return state.actionLog.map((entry) => {
+    const actor = state.players[entry.seat]?.name ?? `Seat ${entry.seat + 1}`;
+    if (entry.type === "raise") return `${actor} raised to $${entry.amount}`;
+    if (entry.type === "all-in") return `${actor} moved all-in to $${entry.amount}`;
+    if (entry.type === "call") return `${actor} called $${entry.toCallBefore}`;
+    return `${actor} ${entry.type === "fold" ? "folded" : "checked"}`;
+  });
+}
+
+function reviewSeed(state: HandState) {
+  const text = `${state.handNumber}|${state.street}|${state.actionLog.length}|${state.players[humanSeat].hole.map(cardLabel).join("")}|${state.board.map(cardLabel).join("")}`;
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+  return hash >>> 0;
+}
+
+function sizeBand(target: number, bounds: ReturnType<typeof legalBounds>) {
+  const tolerance = Math.max(2, Math.round(target * 0.18));
+  return { target, min: Math.max(bounds.min, target - tolerance), max: Math.min(bounds.max, target + tolerance) };
+}
+
+function selectedTarget(state: HandState, action: PokerAction) {
+  return action.type === "all-in" ? state.players[humanSeat].stack + state.players[humanSeat].streetBet : action.amount ?? 0;
+}
+
+function downgradeForSizing(grade: ReviewItem["grade"], state: HandState, action: PokerAction, recommendedSize?: ReviewItem["recommendedSize"]) {
+  if (!recommendedSize || (action.type !== "raise" && action.type !== "all-in")) return grade;
+  const target = selectedTarget(state, action);
+  if (target >= recommendedSize.min && target <= recommendedSize.max) return grade;
+  if (target > recommendedSize.max * 1.6 || target < recommendedSize.min * 0.7) return "Costly";
+  if (target === state.players[humanSeat].stack + state.players[humanSeat].streetBet && buildBotContext(state, humanSeat).spr > 1.2) return "Costly";
+  return grade === "Preferred" ? "Viable" : "Costly";
+}
+
 function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const player = state.players[humanSeat];
   const toCall = toCallFor(state, humanSeat);
   const pot = potTotal(state);
   const context = buildBotContext(state, humanSeat);
-  const equity = state.street === "preflop" ? preflopStrength(player.hole) : estimateRangeEquity(state, humanSeat, 120);
+  const bounds = legalBounds(state, humanSeat);
   const potOdds = toCall / Math.max(1, pot + toCall);
-  const preflopPlan = analyzePreflopSpot(state, humanSeat);
-  if (preflopPlan) {
-    const aggressiveAction = action.type === "raise" || action.type === "all-in";
-    const matched = preflopPlan.preferred === "all-in" ? aggressiveAction && (action.type === "all-in" || action.amount === player.stack + player.streetBet)
-      : preflopPlan.preferred === "raise" ? aggressiveAction
-        : preflopPlan.preferred === "call" ? action.type === "call" || (action.type === "check" && toCall === 0)
-          : action.type === "fold";
-    const adjacent = !matched && ((preflopPlan.preferred === "all-in" && action.type === "call")
-      || (preflopPlan.preferred === "raise" && action.type === "call")
-      || (preflopPlan.preferred === "call" && aggressiveAction));
-    const suggestion = preflopPlan.preferred === "all-in" ? "Move all-in"
-      : preflopPlan.preferred === "raise" ? "Raise"
-        : preflopPlan.preferred === "call" ? (toCall > 0 ? "Call" : "Check")
-          : "Fold";
-    const actionText = action.type === "raise" ? `Raised to $${action.amount}` : action.type.replace("-", " ");
-    return {
-      street: state.street,
-      position: player.position,
-      cards: player.hole,
-      board: state.board,
-      pot,
-      toCall,
-      action: actionText[0].toUpperCase() + actionText.slice(1),
-      equity,
-      equityLabel: "Hand percentile",
-      potOdds,
-      grade: matched ? "Strong" : adjacent ? "Reasonable" : "Questionable",
-      suggestion,
-      note: preflopPlan.reason,
-      confidence: preflopPlan.confidence,
-      basis: `${preflopPlan.hand} · ${preflopPlan.effectiveStackBb} BB effective · stack-aware preflop chart`,
-    };
-  }
-  const strong = equity > Math.max(0.56, potOdds + 0.18);
-  const weak = equity < potOdds - 0.03;
-  const suggestion = toCall === 0 ? (strong ? "Bet for value" : "Check is sound") : weak ? "Fold" : strong ? "Raise for value" : "Call";
-  let grade: ReviewItem["grade"] = "Reasonable";
-  if ((action.type === "fold" && weak) || ((action.type === "call" || action.type === "check") && !strong && !weak) || ((action.type === "raise" || action.type === "all-in") && strong)) grade = "Strong";
-  if ((action.type === "fold" && strong) || ((action.type === "call" || action.type === "raise") && weak)) grade = "Questionable";
-  const actionText = action.type === "raise" ? `Raised to $${action.amount}` : action.type.replace("-", " ");
-  return {
+  const common = {
+    id: `${state.handNumber}-${state.street}-${state.actionLog.length}`,
+    handNumber: state.handNumber,
     street: state.street,
     position: player.position,
-    cards: player.hole,
-    board: state.board,
+    cards: [...player.hole],
+    board: [...state.board],
     pot,
     toCall,
-    action: actionText[0].toUpperCase() + actionText.slice(1),
-    equity,
-    equityLabel: state.street === "preflop" ? "Hand percentile" : "Equity vs ranges",
+    effectiveStack: context.effectiveStack,
+    spr: Math.round(context.spr * 10) / 10,
+    opponents: context.opponents.length,
+    actionLine: reviewActionLine(state),
+    action: reviewActionText(state, action),
     potOdds,
+  };
+  const preflopPlan = analyzePreflopSpot(state, humanSeat);
+  if (preflopPlan) {
+    const chosen = action.type === "check" && toCall === 0 ? "call" : action.type;
+    const preferred = preflopPlan.preferred;
+    const exact = chosen === preferred;
+    const viable = !exact && ((preferred === "raise" && chosen === "call")
+      || (preferred === "call" && chosen === "raise")
+      || (preferred === "all-in" && chosen === "call"));
+    let grade: ReviewItem["grade"] = exact ? "Preferred" : viable ? "Viable" : "Costly";
+    const raise = preferred === "raise" ? contextualPreflopRaise(state, humanSeat) : null;
+    const recommendedSize = raise?.type === "raise" && raise.amount !== undefined ? sizeBand(raise.amount, bounds) : undefined;
+    grade = downgradeForSizing(grade, state, action, recommendedSize);
+    const suggestion = preferred === "all-in" ? "Move all-in"
+      : preferred === "raise" ? `Raise${recommendedSize ? ` to about $${recommendedSize.target}` : ""}`
+        : preferred === "call" ? (toCall > 0 ? "Call" : "Check") : "Fold";
+    const concept = preflopPlan.effectiveStackBb <= 25 ? "Short-stack decision"
+      : state.raiseCount === 0 ? "Opening range"
+        : state.raiseCount === 1 ? "Responding to an open" : "Playing a re-raised pot";
+    const alternatives = (["fold", toCall > 0 ? "call" : "check", preferred === "all-in" ? "all-in" : "raise"] as string[])
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .map((value) => ({
+        action: value === "all-in" ? "All-in" : value[0].toUpperCase() + value.slice(1),
+        verdict: (value === preferred || (value === "check" && preferred === "call")) ? "Preferred" as const
+          : ((preferred === "raise" && value === "call") || (preferred === "call" && value === "raise") || (preferred === "all-in" && value === "call")) ? "Viable" as const
+            : "Costly" as const,
+        reason: value === preferred || (value === "check" && preferred === "call")
+          ? preflopPlan.reason
+          : value === "raise" || value === "all-in" ? "Adds more chips than the reference range supports in this configuration."
+            : value === "call" ? "Keeps the pot smaller, but may surrender initiative or continue too loosely."
+              : "Gives up the hand and any equity it could profitably realize.",
+      }));
+    return {
+      ...common,
+      equityLabel: "Preflop reference",
+      grade,
+      suggestion,
+      concept,
+      takeaway: state.raiseCount === 0
+        ? `Start with the ${player.position} opening range, then adjust for stack depth and players already in the pot.`
+        : `Defending depends on both positions, the price, stack depth, and whether you close the action.`,
+      alternatives,
+      recommendedSize,
+      note: `${preflopPlan.reason}${recommendedSize ? ` A normal target is $${recommendedSize.target}; sizing is part of the decision.` : ""}`,
+      confidence: preflopPlan.confidence,
+      basis: `${preflopPlan.hand} · ${preflopPlan.effectiveStackBb} BB effective · position-and-action reference`,
+    };
+  }
+
+  const iterations = 600;
+  const equity = estimateRangeEquity(state, humanSeat, iterations, seededRandom(reviewSeed(state)));
+  const samplingMargin = 1.96 * Math.sqrt(Math.max(0.0001, equity * (1 - equity)) / iterations);
+  const uncertainty = Math.min(0.09, samplingMargin + 0.035);
+  const equityLow = Math.max(0, equity - uncertainty);
+  const equityHigh = Math.min(1, equity + uncertainty);
+  const features = handFeatures(player.hole, state.board);
+  const strong = equityLow > Math.max(0.55, potOdds + 0.12);
+  const weak = equityHigh < potOdds;
+  const draw = features.draw;
+  const raiseTarget = Math.min(bounds.max, Math.max(bounds.min, state.currentBet + Math.max(state.minRaise, Math.round(pot * (state.currentBet > 0 ? 0.72 : boardWetness(state.board) > 0.55 ? 0.66 : 0.5)))));
+  const recommendedSize = bounds.canRaise && (strong || draw) ? sizeBand(raiseTarget, bounds) : undefined;
+  let preferred: ActionKind = toCall > 0 ? (weak ? "fold" : strong ? "raise" : "call") : strong ? "raise" : "check";
+  if (toCall === 0 && draw && context.opponents.length === 1 && context.inPosition) preferred = "raise";
+  const normalizedAction = action.type === "all-in" ? "all-in" : action.type;
+  let grade: ReviewItem["grade"] = normalizedAction === preferred ? "Preferred" : "Viable";
+  if ((weak && ["call", "raise", "all-in"].includes(normalizedAction)) || (strong && normalizedAction === "fold")) grade = "Costly";
+  if (normalizedAction === "all-in" && context.spr > 1.2) grade = "Costly";
+  grade = downgradeForSizing(grade, state, action, recommendedSize);
+  const suggestion = preferred === "raise" ? `${state.currentBet > 0 ? "Raise" : "Bet"}${recommendedSize ? ` to about $${recommendedSize.target}` : ""}`
+    : preferred === "call" ? "Call" : preferred === "fold" ? "Fold" : "Check";
+  const concept = state.street === "river" && toCall > 0 ? "River bluff-catching"
+    : context.opponents.length > 1 ? "Multiway equity realization"
+      : draw ? "Draws and semi-bluffing"
+        : toCall > 0 ? "Pot odds and ranges" : strong ? "Value betting" : "Checking and pot control";
+  const legalActions: ActionKind[] = toCall > 0 ? ["fold", "call", ...(bounds.canRaise ? ["raise" as const] : [])] : ["check", ...(bounds.canRaise ? ["raise" as const] : [])];
+  const alternatives = legalActions.map((candidate) => {
+    let verdict: ReviewItem["grade"] = candidate === preferred ? "Preferred" : "Viable";
+    if ((weak && (candidate === "call" || candidate === "raise")) || (strong && candidate === "fold")) verdict = "Costly";
+    const reason = candidate === "fold" ? (weak ? "Avoids investing when even the optimistic equity estimate misses the price." : "Surrenders meaningful showdown equity.")
+      : candidate === "call" ? (weak ? "The modeled range does not supply enough equity at this price." : "Realizes equity without inflating the pot, though future streets still matter.")
+        : candidate === "check" ? (strong ? "Controls the pot but may miss value or allow a free card." : "Preserves the stack and keeps weaker hands in.")
+          : strong ? "Builds value against worse continuing hands; use a disciplined size." : draw ? "Can combine fold equity with live drawing equity, but is range-sensitive." : "Requires enough folds to compensate for limited showdown equity.";
+    return { action: candidate === "raise" ? (state.currentBet > 0 ? "Raise" : "Bet") : candidate[0].toUpperCase() + candidate.slice(1), verdict, reason };
+  });
+  return {
+    ...common,
+    equity,
+    equityLow,
+    equityHigh,
+    equityLabel: "Equity vs modeled ranges",
     grade,
     suggestion,
+    concept,
+    takeaway: toCall > 0
+      ? "Compare the price with a range of plausible equities, then account for position, future betting, and whether raising can make better hands fold."
+      : "Checking is an active option: bet only when worse hands can call, better hands can fold, or protection has real value.",
+    alternatives,
+    recommendedSize,
     note: weak
-      ? "Your estimated equity trails the price being offered. Preserve the stack unless you have a specific read."
+      ? "Even the optimistic equity estimate falls short of the immediate calling price."
       : strong
-        ? "Your range has a meaningful edge here. Building the pot is usually preferable to giving a free card."
-        : `This is a close, range-dependent spot. You are ${context.inPosition ? "in position" : "out of position"} in a ${context.potType} pot, so future betting and equity realization matter nearly as much as raw equity.`,
-    confidence: "Low",
-    basis: "Approximate range simulation; not a solved strategy",
+        ? `Your hand appears well ahead of the modeled continuing ranges, but the recommended size still matters.`
+        : `This is a close, range-sensitive spot. You are ${context.inPosition ? "in position" : "out of position"} in a ${context.potType} pot, so raw equity alone does not settle the decision.`,
+    confidence: weak || strong ? "Medium" : "Low",
+    basis: `${iterations} deterministic range-weighted trials · uncertainty includes sampling and range-model allowance`,
   };
 }
 
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 6
+  return candidate.version === 7
     && typeof candidate.raiseCount === "number"
     && Array.isArray(candidate.actionLog)
     && Array.isArray(candidate.players)
     && candidate.players.length === 6
     && candidate.players.every((player) => typeof player.stats?.preflopFolds === "number")
     && Array.isArray(candidate.deck)
-    && Array.isArray(candidate.board);
+    && Array.isArray(candidate.board)
+    && Array.isArray(candidate.reviews)
+    && Array.isArray(candidate.reviewArchive);
 }
 
 export function migrateSavedState(value: unknown): HandState | null {
   if (isValidSavedState(value)) return value;
   if (!value || typeof value !== "object") return null;
   const legacy = value as Omit<Partial<HandState>, "version"> & { version?: number };
-  if (![4, 5].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
+  if (![4, 5, 6].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
   const migrated = {
     ...legacy,
-    version: 6,
+    version: 7,
     players: legacy.players.map((player) => ({
       ...player,
       stats: { ...emptyStats(), ...player.stats },
@@ -1691,6 +1813,8 @@ export function migrateSavedState(value: unknown): HandState | null {
     preflopAggressor: legacy.preflopAggressor ?? null,
     lastAggressor: legacy.lastAggressor ?? null,
     actionLog: legacy.actionLog ?? [],
+    reviews: [],
+    reviewArchive: [],
   } as HandState;
   // A v4 in-progress hand lacks the public action sequence required by the
   // new range model. Preserve bankroll and statistics, then begin a clean hand.

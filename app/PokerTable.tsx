@@ -17,11 +17,12 @@ import {
   type Card,
   type HandState,
   type PokerAction,
+  type ReviewItem,
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v6";
-const LEGACY_STORAGE_KEYS = ["riverroom-session-v5", "riverroom-session-v4"];
+const STORAGE_KEY = "riverroom-session-v7";
+const LEGACY_STORAGE_KEYS = ["riverroom-session-v6", "riverroom-session-v5", "riverroom-session-v4"];
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 
@@ -70,26 +71,39 @@ function SeatView({ player, index, state }: { player: Seat; index: number; state
   );
 }
 
-function ReviewPanel({ state, onClose }: { state: HandState; onClose: () => void }) {
+function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: string; onClose: () => void }) {
+  const focus = items.find((item) => item.grade === "Costly") ?? items.find((item) => item.grade === "Viable") ?? items[0];
   return (
     <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="review-title">
       <div className="review-panel">
         <div className="review-header">
-          <div><span className="eyebrow">Post-hand review</span><h2 id="review-title">Decision debrief</h2></div>
+          <div><span className="eyebrow">Decision coach</span><h2 id="review-title">{title}</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="Close review">×</button>
         </div>
-        <p className="review-disclaimer">Range-based estimates only — useful for practice, not solver-grade GTO advice.</p>
-        {state.reviews.length === 0 ? <p className="empty">You didn’t face a decision in this hand.</p> : (
+        <p className="review-disclaimer">Advice uses only information available when you acted. Close spots are labeled as such; estimates are not solver-grade GTO solutions.</p>
+        {focus && <section className="review-focus"><span>Best lesson to keep</span><strong>{focus.concept}</strong><p>{focus.takeaway}</p></section>}
+        {items.length === 0 ? <p className="empty">You didn’t face a decision in this hand.</p> : (
           <div className="review-list">
-            {state.reviews.map((item, index) => (
-              <article className="review-item" key={`${item.street}-${index}`}>
-                <div className="review-item-top"><span>{item.street} · {item.position}</span><b className={`grade ${item.grade.toLowerCase()}`}>{item.grade}</b></div>
+            {items.map((item) => (
+              <article className="review-item" key={item.id}>
+                <div className="review-item-top"><span>Hand #{item.handNumber} · {item.street} · {item.position}</span><b className={`grade ${item.grade.toLowerCase()}`}>{item.grade}</b></div>
+                <div className="review-cards">
+                  <div><small>Your hand</small><span>{item.cards.map(cardLabel).join(" ")}</span></div>
+                  <div><small>Board</small><span>{item.board.length ? item.board.map(cardLabel).join(" ") : "Not dealt"}</span></div>
+                </div>
+                {item.actionLine.length > 0 && <p className="review-line"><strong>Before you:</strong> {item.actionLine.slice(-5).join(" → ")}</p>}
                 <div className="review-metrics">
                   <div><small>Your action</small><strong>{item.action}</strong></div>
-                  <div><small>{item.equityLabel ?? (item.street === "preflop" ? "Hand percentile" : "Equity vs ranges")}</small><strong>{Math.round(item.equity * 100)}%</strong></div>
-                  <div><small>Pot odds</small><strong>{Math.round(item.potOdds * 100)}%</strong></div>
+                  <div><small>Pot · to call</small><strong>${item.pot} · ${item.toCall}</strong></div>
+                  <div><small>Effective stack · SPR</small><strong>${item.effectiveStack} · {item.spr}</strong></div>
                 </div>
-                <p><strong>Better line: {item.suggestion}.</strong> {item.note}</p>
+                {item.equity !== undefined && <div className="equity-strip"><span><small>{item.equityLabel}</small><strong>{Math.round((item.equityLow ?? item.equity) * 100)}–{Math.round((item.equityHigh ?? item.equity) * 100)}%</strong></span><span><small>Immediate calling price</small><strong>{Math.round(item.potOdds * 100)}%</strong></span></div>}
+                <p className="review-verdict"><strong>Recommended baseline: {item.suggestion}.</strong> {item.note}</p>
+                {item.recommendedSize && <p className="size-guidance">Sizing guide: target ${item.recommendedSize.target}; approximately ${item.recommendedSize.min}–${item.recommendedSize.max} remains reasonable.</p>}
+                <div className="review-alternatives" aria-label="Action comparison">
+                  {item.alternatives.map((alternative) => <div key={alternative.action}><b className={`mini-grade ${alternative.verdict.toLowerCase()}`}>{alternative.verdict}</b><strong>{alternative.action}</strong><span>{alternative.reason}</span></div>)}
+                </div>
+                <p className="review-takeaway"><strong>Remember:</strong> {item.takeaway}</p>
                 {item.basis && <small className="review-basis">{item.confidence ?? "Low"} confidence · {item.basis}</small>}
               </article>
             ))}
@@ -152,7 +166,7 @@ function ActionMix({
 export default function PokerTable() {
   const [state, setState] = useState<HandState | null>(null);
   const [raiseTo, setRaiseTo] = useState<string | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewMode, setReviewMode] = useState<"current" | "history" | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const act = (action: PokerAction) => {
@@ -213,7 +227,7 @@ export default function PokerTable() {
     localStorage.removeItem(STORAGE_KEY);
     LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
     setRaiseTo(null);
-    setReviewOpen(false);
+    setReviewMode(null);
     setState(createSession());
   };
   const toCall = toCallFor(state, humanSeat);
@@ -279,7 +293,7 @@ export default function PokerTable() {
             <section className="between-hands">
               <div><span className="eyebrow">Hand complete</span><h2>{state.result}</h2><p>Your stack: ${state.players[humanSeat].stack} · Session: {state.sessionHands} hands</p></div>
               <div>
-                {state.reviews.length > 0 && <button onClick={() => setReviewOpen(true)}>Review decisions</button>}
+                {state.reviews.length > 0 && <button onClick={() => setReviewMode("current")}>Review decisions</button>}
                 {state.status === "busted" ? <button className="primary" onClick={reset}>Reset bankroll</button>
                   : state.status === "tableClosed" ? <button className="primary" onClick={reset}>Start new table</button>
                     : <button className="primary" onClick={() => setState(startHand(state))}>Deal next hand</button>}
@@ -326,11 +340,16 @@ export default function PokerTable() {
               ]}
               note={`${postflopDecisions} decisions after the flop`}
             />
+            {(state.reviewArchive.length > 0 || state.reviews.length > 0) && <button className="review-history-button" onClick={() => setReviewMode("history")}>Review learning history · {state.reviewArchive.length + state.reviews.length}</button>}
           </section>
           <p className="privacy-note">Saved on this device. Opponents never see hidden cards.</p>
         </aside>
       </div>
-      {reviewOpen && <ReviewPanel state={state} onClose={() => setReviewOpen(false)} />}
+      {reviewMode && <ReviewPanel
+        items={reviewMode === "current" ? state.reviews : [...state.reviewArchive, ...state.reviews].slice(-120).reverse()}
+        title={reviewMode === "current" ? `Hand #${state.handNumber} debrief` : "Learning history"}
+        onClose={() => setReviewMode(null)}
+      />}
       {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
     </main>
   );

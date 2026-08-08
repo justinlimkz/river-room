@@ -609,7 +609,7 @@ test("short-stack coaching uses the same chart and explains the recommendation",
   state.actionLog = [{ street: "preflop", seat: opener, type: "raise", amount: 4, toCallBefore: 1, raiseLevel: 0 }];
   const next = applyAction(state, humanSeat, { type: "all-in" });
   assert.equal(next.reviews[0].suggestion, "Move all-in");
-  assert.equal(next.reviews[0].grade, "Strong");
+  assert.equal(next.reviews[0].grade, "Preferred");
   assert.equal(next.reviews[0].confidence, "High");
   assert.match(next.reviews[0].basis!, /JJ · 10 BB effective/);
 });
@@ -620,10 +620,88 @@ test("deep-stack coaching uses position-specific starting-hand ranges", () => {
   state.players[humanSeat].position = "HJ";
   state.players[humanSeat].hole = [card("A", "hearts"), card("A", "spades")];
   const next = applyAction(state, humanSeat, { type: "raise", amount: 6 });
-  assert.equal(next.reviews[0].suggestion, "Raise");
-  assert.equal(next.reviews[0].grade, "Strong");
+  assert.equal(next.reviews[0].suggestion, "Raise to about $6");
+  assert.equal(next.reviews[0].grade, "Preferred");
+  assert.equal(next.reviews[0].equity, undefined);
+  assert.equal(next.reviews[0].equityLabel, "Preflop reference");
   assert.match(next.reviews[0].basis!, /AA · 100 BB effective/);
   assert.match(next.reviews[0].note, /HJ opening range/);
+});
+
+test("coaching grades the chosen raise size instead of only the action category", () => {
+  const sensible = createSession(seededRandom(906));
+  sensible.currentActor = humanSeat;
+  sensible.players[humanSeat].position = "HJ";
+  sensible.players[humanSeat].hole = [card("A", "hearts"), card("A", "spades")];
+  const normalReview = applyAction(sensible, humanSeat, { type: "raise", amount: 6 }).reviews[0];
+
+  const oversized = createSession(seededRandom(906));
+  oversized.currentActor = humanSeat;
+  oversized.players[humanSeat].position = "HJ";
+  oversized.players[humanSeat].hole = [card("A", "hearts"), card("A", "spades")];
+  const oversizedReview = applyAction(oversized, humanSeat, { type: "raise", amount: 100 }).reviews[0];
+
+  assert.equal(normalReview.grade, "Preferred");
+  assert.equal(oversizedReview.grade, "Costly");
+  assert.deepEqual(normalReview.recommendedSize, { target: 6, min: 4, max: 8 });
+});
+
+function postflopCoachingSpot() {
+  const state = createSession(seededRandom(907));
+  const opponent = 0;
+  state.street = "flop";
+  state.board = [card("A", "clubs"), card("K", "diamonds"), card("8", "hearts")];
+  state.players.forEach((player, index) => { player.folded = index !== humanSeat && index !== opponent; });
+  state.players[humanSeat].hole = [card("Q", "clubs"), card("J", "clubs")];
+  state.players[humanSeat].stack = 180;
+  state.players[humanSeat].committed = 20;
+  state.players[humanSeat].streetBet = 0;
+  state.players[opponent].stack = 172;
+  state.players[opponent].committed = 28;
+  state.players[opponent].streetBet = 8;
+  state.players[opponent].hole = [card("A", "spades"), card("T", "spades")];
+  state.currentBet = 8;
+  state.minRaise = 8;
+  state.currentActor = humanSeat;
+  state.players[opponent].acted = true;
+  state.lastAggressor = opponent;
+  state.actionLog = [
+    { street: "preflop", seat: opponent, type: "raise", amount: 6, toCallBefore: 2, raiseLevel: 0 },
+    { street: "flop", seat: opponent, type: "raise", amount: 8, toCallBefore: 0, raiseLevel: 0 },
+  ];
+  return state;
+}
+
+test("postflop coaching is deterministic and never uses an opponent's hidden cards", () => {
+  const first = postflopCoachingSpot();
+  const second = postflopCoachingSpot();
+  second.players[0].hole = [card("2", "diamonds"), card("3", "diamonds")];
+  const firstReview = applyAction(first, humanSeat, { type: "call" }).reviews[0];
+  const secondReview = applyAction(second, humanSeat, { type: "call" }).reviews[0];
+  assert.equal(firstReview.equity, secondReview.equity);
+  assert.equal(firstReview.grade, secondReview.grade);
+  assert.ok((firstReview.equityHigh ?? 0) > (firstReview.equityLow ?? 1));
+  assert.match(firstReview.basis!, /deterministic/);
+});
+
+test("an unjustified deep-stack postflop all-in is never allowed to look reasonable", () => {
+  const state = postflopCoachingSpot();
+  state.players[humanSeat].hole = [card("7", "clubs"), card("2", "clubs")];
+  const review = applyAction(state, humanSeat, { type: "all-in" }).reviews[0];
+  assert.equal(review.grade, "Costly");
+});
+
+test("completed-hand decisions move into the capped learning archive", () => {
+  const state = createSession(seededRandom(908));
+  state.currentActor = humanSeat;
+  state.players[humanSeat].position = "HJ";
+  state.players[humanSeat].hole = [card("A", "hearts"), card("A", "spades")];
+  const reviewed = applyAction(state, humanSeat, { type: "raise", amount: 6 });
+  reviewed.status = "handOver";
+  const next = startHand(reviewed, seededRandom(909));
+  assert.equal(next.reviews.length, 0);
+  assert.equal(next.reviewArchive.length, 1);
+  assert.equal(next.reviewArchive[0].handNumber, state.handNumber);
 });
 
 test("the stack-aware overlay leaves deep-stack predecessor decisions unchanged", () => {
@@ -645,7 +723,7 @@ test("legacy saves preserve bankroll and statistics while starting a clean upgra
   const legacy = { ...state, version: 4 };
   const migrated = migrateSavedState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.status, "handOver");
   assert.equal(migrated.players[5].stack, 180);
   assert.equal(migrated.players[5].stats.vpip, 12);
@@ -687,7 +765,7 @@ test("v5 saves gain empty counters without interrupting an active hand", () => {
   });
   const migrated = migrateSavedState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated.version, 6);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.status, "playing");
   assert.equal(migrated.currentActor, state.currentActor);
   assert.equal(migrated.players[5].stats.preflopFolds, 0);
