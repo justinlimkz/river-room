@@ -810,6 +810,8 @@ const DEEP_OPEN_RANGES = Object.fromEntries(Object.entries(DEEP_OPEN_SPECS).map(
 const DEEP_CONTINUE_RANGES = Object.fromEntries(Object.entries(DEEP_CONTINUE_SPECS).map(([position, spec]) => [position, expandRange(spec)])) as Record<Position, Set<string>>;
 const DEEP_THREE_BET_RANGES = Object.fromEntries(Object.entries(DEEP_THREE_BET_SPECS).map(([position, spec]) => [position, expandRange(spec)])) as Record<Position, Set<string>>;
 const DEEP_FOUR_BET_RANGE = expandRange("QQ+ AKs AKo");
+const DEEP_PREMIUM_STACK_OFF_RANGE = expandRange("KK+");
+const DEEP_FOUR_BET_CONTINUE_RANGE = expandRange("QQ+ AKs AKo");
 
 export type PreflopPlan = {
   preferred: "fold" | "call" | "raise" | "all-in";
@@ -850,6 +852,27 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
     }
     if (state.raiseCount === 2 && DEEP_FOUR_BET_RANGE.has(hand)) {
       return { preferred: "raise", confidence: "High", effectiveStackBb, hand, reason: `${hand} is strong enough to continue aggressively against a three-bet.` };
+    }
+    if (state.raiseCount >= 3 && DEEP_PREMIUM_STACK_OFF_RANGE.has(hand)) {
+      const preferred = state.raiseCount === 3 && effectiveStackBb <= 150 ? "all-in" : "call";
+      return {
+        preferred,
+        confidence: "High",
+        effectiveStackBb,
+        hand,
+        reason: preferred === "all-in"
+          ? `${hand} is a premium stack-off hand against a four-bet at ${effectiveStackBb} BB effective.`
+          : `${hand} must continue against this re-raise; at this depth, calling preserves a wider continuing range.`,
+      };
+    }
+    if (state.raiseCount === 3 && DEEP_FOUR_BET_CONTINUE_RANGE.has(hand) && effectiveStackBb <= 120 && toCallFor(state, seatIndex) <= player.stack * 0.28) {
+      return {
+        preferred: "call",
+        confidence: "Medium",
+        effectiveStackBb,
+        hand,
+        reason: `${hand} remains inside the modeled four-bet continuing range at this price and stack depth.`,
+      };
     }
     return { preferred: "fold", confidence: "Medium", effectiveStackBb, hand, reason: `${hand} falls outside the modeled continuing range after this preflop action.` };
   }

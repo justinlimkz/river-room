@@ -646,6 +646,55 @@ test("coaching grades the chosen raise size instead of only the action category"
   assert.deepEqual(normalReview.recommendedSize, { target: 6, min: 4, max: 8 });
 });
 
+function kkFacingFourBetSpot() {
+  const state = createSession(seededRandom(910));
+  const button = 3;
+  const bigBlind = 4;
+  state.players.forEach((player, index) => { player.folded = index !== humanSeat && index !== bigBlind; });
+  state.players[humanSeat].position = "SB";
+  state.players[humanSeat].hole = [card("K", "hearts"), card("K", "spades")];
+  state.players[humanSeat].streetBet = 8;
+  state.players[humanSeat].committed = 8;
+  state.players[humanSeat].stack = 192;
+  state.players[bigBlind].position = "BB";
+  state.players[bigBlind].streetBet = 18;
+  state.players[bigBlind].committed = 18;
+  state.players[bigBlind].stack = 182;
+  state.players[button].position = "BTN";
+  state.players[button].streetBet = 5;
+  state.players[button].committed = 5;
+  state.currentActor = humanSeat;
+  state.currentBet = 18;
+  state.minRaise = 10;
+  state.raiseCount = 3;
+  state.preflopRaises = 3;
+  state.preflopOpener = button;
+  state.preflopAggressor = bigBlind;
+  state.lastAggressor = bigBlind;
+  state.actionLog = [
+    { street: "preflop", seat: button, type: "raise", amount: 5, toCallBefore: 2, raiseLevel: 0 },
+    { street: "preflop", seat: humanSeat, type: "raise", amount: 8, toCallBefore: 4, raiseLevel: 1 },
+    { street: "preflop", seat: bigBlind, type: "raise", amount: 18, toCallBefore: 6, raiseLevel: 2 },
+    { street: "preflop", seat: button, type: "fold", amount: 5, toCallBefore: 13, raiseLevel: 3 },
+  ];
+  return state;
+}
+
+test("KK facing a four-bet at 100 BB is a premium stack-off, never a fold", () => {
+  const spot = kkFacingFourBetSpot();
+  const plan = analyzePreflopSpot(spot, humanSeat);
+  assert.equal(plan?.preferred, "all-in");
+  assert.equal(plan?.confidence, "High");
+  assert.match(plan?.reason ?? "", /premium stack-off/);
+
+  const folded = applyAction(spot, humanSeat, { type: "fold" });
+  assert.equal(folded.reviews[0].suggestion, "Move all-in");
+  assert.equal(folded.reviews[0].grade, "Costly");
+
+  const shoved = applyAction(kkFacingFourBetSpot(), humanSeat, { type: "all-in" });
+  assert.equal(shoved.reviews[0].grade, "Preferred");
+});
+
 function postflopCoachingSpot() {
   const state = createSession(seededRandom(907));
   const opponent = 0;
