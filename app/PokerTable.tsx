@@ -210,16 +210,28 @@ export default function PokerTable() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!humanTurn || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!state || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement;
       if (target.tagName === "INPUT") return;
-      if (event.key.toLowerCase() === "f") act({ type: "fold" });
-      if (event.key.toLowerCase() === "c") act(heroToCall ? { type: "call" } : { type: "check" });
-      if (event.key.toLowerCase() === "r" && bounds.canRaise) act({ type: "raise", amount: effectiveRaiseTo });
+      const key = event.key.toLowerCase();
+      if (humanTurn) {
+        if (key === "f") act({ type: "fold" });
+        if (key === "c") act(heroToCall ? { type: "call" } : { type: "check" });
+        if (key === "r" && bounds.canRaise) act({ type: "raise", amount: effectiveRaiseTo });
+        return;
+      }
+      if (state.status === "handOver" && key === "v" && state.reviews.length > 0) {
+        event.preventDefault();
+        setReviewMode("current");
+      }
+      if (state.status === "handOver" && key === "n") {
+        event.preventDefault();
+        setState((current) => current?.status === "handOver" ? startHand(current) : current);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [humanTurn, heroToCall, bounds.canRaise, effectiveRaiseTo]);
+  }, [state, humanTurn, heroToCall, bounds.canRaise, effectiveRaiseTo]);
 
   if (!state) return <main className="loading">Shuffling the deck…</main>;
 
@@ -293,10 +305,10 @@ export default function PokerTable() {
             <section className="between-hands">
               <div><span className="eyebrow">Hand complete</span><h2>{state.result}</h2><p>Your stack: ${state.players[humanSeat].stack} · Session: {state.sessionHands} hands</p></div>
               <div>
-                {state.reviews.length > 0 && <button onClick={() => setReviewMode("current")}>Review decisions</button>}
+                {state.reviews.length > 0 && <button onClick={() => setReviewMode("current")}><kbd>V</kbd> Review decisions</button>}
                 {state.status === "busted" ? <button className="primary" onClick={reset}>Reset bankroll</button>
                   : state.status === "tableClosed" ? <button className="primary" onClick={reset}>Start new table</button>
-                    : <button className="primary" onClick={() => setState(startHand(state))}>Deal next hand</button>}
+                    : <button className="primary" onClick={() => setState(startHand(state))}><kbd>N</kbd> Deal next hand</button>}
               </div>
             </section>
           )}
