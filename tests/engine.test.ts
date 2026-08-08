@@ -695,6 +695,73 @@ test("KK facing a four-bet at 100 BB is a premium stack-off, never a fold", () =
   assert.equal(shoved.reviews[0].grade, "Preferred");
 });
 
+function aqoFacingThreeBetSpot({ squeeze, lateVsBlind = false }: { squeeze: boolean; lateVsBlind?: boolean }) {
+  const state = createSession(seededRandom(lateVsBlind ? 913 : squeeze ? 911 : 912));
+  const caller = 1;
+  const aggressor = 2;
+  state.players.forEach((player, index) => { player.folded = index !== humanSeat && index !== aggressor && (!squeeze || index !== caller); });
+  state.players[humanSeat].position = lateVsBlind ? "BTN" : "UTG";
+  state.players[humanSeat].hole = [card("A", "clubs"), card("Q", "spades")];
+  state.players[humanSeat].streetBet = 4;
+  state.players[humanSeat].committed = 4;
+  state.players[humanSeat].stack = lateVsBlind ? 196 : 316;
+  state.players[aggressor].position = lateVsBlind ? "BB" : "BTN";
+  state.players[aggressor].streetBet = lateVsBlind ? 14 : 16;
+  state.players[aggressor].committed = lateVsBlind ? 14 : 16;
+  state.players[aggressor].stack = lateVsBlind ? 186 : 304;
+  state.players[caller].position = "HJ";
+  state.players[caller].streetBet = squeeze ? 4 : 0;
+  state.players[caller].committed = squeeze ? 4 : 0;
+  state.currentActor = humanSeat;
+  state.currentBet = lateVsBlind ? 14 : 16;
+  state.minRaise = lateVsBlind ? 10 : 12;
+  state.raiseCount = 2;
+  state.preflopRaises = 2;
+  state.preflopOpener = humanSeat;
+  state.preflopAggressor = aggressor;
+  state.lastAggressor = aggressor;
+  state.actionLog = [
+    { street: "preflop", seat: humanSeat, type: "raise", amount: 4, toCallBefore: 2, raiseLevel: 0 },
+    ...(squeeze ? [{ street: "preflop" as const, seat: caller, type: "call" as const, amount: 4, toCallBefore: 4, raiseLevel: 1 }] : []),
+    { street: "preflop", seat: aggressor, type: "raise", amount: lateVsBlind ? 14 : 16, toCallBefore: lateVsBlind ? 2 : 4, raiseLevel: 1 },
+  ];
+  return state;
+}
+
+test("AQo UTG recognizes a squeeze and recommends folding rather than calling", () => {
+  const spot = aqoFacingThreeBetSpot({ squeeze: true });
+  const plan = analyzePreflopSpot(spot, humanSeat)!;
+  assert.equal(plan.preferred, "fold");
+  assert.match(plan.scenario, /UTG opener facing a BTN squeeze after 1 caller/);
+  assert.equal(plan.frequencies.fold, 0.87);
+  assert.equal(plan.frequencies.raise, 0.1);
+  assert.equal(plan.frequencies.call, 0.03);
+  assert.ok(Math.abs(Object.values(plan.frequencies).reduce((sum, value) => sum + value, 0) - 1) < 1e-9);
+
+  const called = applyAction(aqoFacingThreeBetSpot({ squeeze: true }), humanSeat, { type: "call" });
+  assert.equal(called.reviews[0].grade, "Costly");
+  assert.match(called.reviews[0].concept, /squeeze/);
+  assert.match(called.reviews[0].alternatives.find((alternative) => alternative.action === "Call")?.reason ?? "", /3% modeled baseline/);
+});
+
+test("AQo continues more often in a BTN-versus-BB three-bet pot than in an early-position squeeze", () => {
+  const squeeze = analyzePreflopSpot(aqoFacingThreeBetSpot({ squeeze: true }), humanSeat)!;
+  const blindBattle = analyzePreflopSpot(aqoFacingThreeBetSpot({ squeeze: false, lateVsBlind: true }), humanSeat)!;
+  assert.equal(blindBattle.preferred, "call");
+  assert.match(blindBattle.scenario, /BTN opener facing a BB three-bet/);
+  assert.ok(blindBattle.frequencies.call > squeeze.frequencies.call + 0.4);
+  assert.ok(blindBattle.frequencies.fold < squeeze.frequencies.fold - 0.45);
+});
+
+test("ordinary three-bets and squeezes produce distinct AQo recommendations", () => {
+  const ordinary = analyzePreflopSpot(aqoFacingThreeBetSpot({ squeeze: false }), humanSeat)!;
+  const squeeze = analyzePreflopSpot(aqoFacingThreeBetSpot({ squeeze: true }), humanSeat)!;
+  assert.doesNotMatch(ordinary.scenario, /squeeze/);
+  assert.match(squeeze.scenario, /squeeze/);
+  assert.ok(squeeze.frequencies.fold > ordinary.frequencies.fold);
+  assert.ok(squeeze.frequencies.call < ordinary.frequencies.call);
+});
+
 function postflopCoachingSpot() {
   const state = createSession(seededRandom(907));
   const opponent = 0;

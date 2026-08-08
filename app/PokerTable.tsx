@@ -101,7 +101,7 @@ function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: st
                 <p className="review-verdict"><strong>Recommended baseline: {item.suggestion}.</strong> {item.note}</p>
                 {item.recommendedSize && <p className="size-guidance">Sizing guide: target ${item.recommendedSize.target}; approximately ${item.recommendedSize.min}–${item.recommendedSize.max} remains reasonable.</p>}
                 <div className="review-alternatives" aria-label="Action comparison">
-                  {item.alternatives.map((alternative) => <div key={alternative.action}><b className={`mini-grade ${alternative.verdict.toLowerCase()}`}>{alternative.verdict}</b><strong>{alternative.action}</strong><span>{alternative.reason}</span></div>)}
+                  {item.alternatives.map((alternative) => <div key={alternative.action}><b className={`mini-grade ${alternative.verdict.toLowerCase()}`}>{alternative.verdict}</b><strong>{alternative.action}{alternative.frequency !== undefined ? ` · ${Math.round(alternative.frequency * 100)}%` : ""}</strong><span>{alternative.reason}</span></div>)}
                 </div>
                 <p className="review-takeaway"><strong>Remember:</strong> {item.takeaway}</p>
                 {item.basis && <small className="review-basis">{item.confidence ?? "Low"} confidence · {item.basis}</small>}
