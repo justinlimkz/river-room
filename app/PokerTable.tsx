@@ -109,7 +109,7 @@ function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: st
             ))}
           </div>
         )}
-        <button className="primary wide" onClick={onClose}>Back to table</button>
+        <button className="primary wide" onClick={onClose}><kbd>V</kbd> Back to table</button>
       </div>
     </div>
   );
@@ -214,6 +214,11 @@ export default function PokerTable() {
       const target = event.target as HTMLElement;
       if (target.tagName === "INPUT") return;
       const key = event.key.toLowerCase();
+      if (reviewMode && key === "v") {
+        event.preventDefault();
+        setReviewMode(null);
+        return;
+      }
       if (humanTurn) {
         if (key === "f") act({ type: "fold" });
         if (key === "c") act(heroToCall ? { type: "call" } : { type: "check" });
@@ -231,7 +236,7 @@ export default function PokerTable() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [state, humanTurn, heroToCall, bounds.canRaise, effectiveRaiseTo]);
+  }, [state, reviewMode, humanTurn, heroToCall, bounds.canRaise, effectiveRaiseTo]);
 
   if (!state) return <main className="loading">Shuffling the deck…</main>;
 

@@ -33,6 +33,8 @@ test("starter preview is fully removed", async () => {
   assert.match(page, /PokerTable/);
   assert.match(table, /River Room house rules/);
   assert.match(table, /No cap on raises/);
+  assert.match(table, /reviewMode && key === "v"/);
+  assert.match(table, /<kbd>V<\/kbd> Back to table/);
   assert.match(layout, /River Room/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
 });
