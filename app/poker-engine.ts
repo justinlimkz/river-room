@@ -35,6 +35,7 @@ export type PublicAction = {
   amount: number;
   toCallBefore: number;
   raiseLevel: number;
+  potBefore?: number;
 };
 export type Seat = {
   id: string;
@@ -87,7 +88,7 @@ export type ReviewItem = {
 };
 
 export type HandState = {
-  version: 7;
+  version: 8;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -110,6 +111,7 @@ export type HandState = {
   result: string;
   sessionStart: number;
   sessionHands: number;
+  sessionRake: number;
 };
 
 export type PublicGameView = Pick<HandState, "street" | "board" | "currentBet" | "minRaise"> & {
@@ -166,6 +168,12 @@ const emptyStats = (): PlayerStats => ({
 
 export const humanSeat = 5;
 export const potTotal = (state: HandState) => state.players.reduce((sum, player) => sum + player.committed, 0);
+export const CASH_RAKE = { rate: 0.05, cap: 3 } as const;
+
+function rakeFor(amount: number, board: Card[], remainingCap = CASH_RAKE.cap) {
+  if (board.length < 3 || amount <= 0 || remainingCap <= 0) return 0;
+  return Math.min(remainingCap, Math.round(amount * CASH_RAKE.rate));
+}
 export const toCallFor = (state: HandState, seat: number) => Math.max(0, state.currentBet - state.players[seat].streetBet);
 export const cardLabel = (card: Card) => `${card.rank}${{ clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" }[card.suit]}`;
 
@@ -264,7 +272,7 @@ function pay(player: Seat, amount: number) {
 
 export function createSession(random: () => number = cryptoRandom): HandState {
   return startHand({
-    version: 7,
+    version: 8,
     handNumber: 0,
     dealer: 4,
     street: "preflop",
@@ -287,6 +295,7 @@ export function createSession(random: () => number = cryptoRandom): HandState {
     result: "",
     sessionStart: 200,
     sessionHands: 0,
+    sessionRake: 0,
   }, random);
 }
 
@@ -296,33 +305,24 @@ export function startHand(previous: HandState, random: () => number = cryptoRand
     : previous.reviewArchive ?? [];
   const players = previous.players.map((old, index) => ({
     ...old,
+    // Online cash-game opponents automatically top back up to the standard
+    // 100 BB buy-in between hands. The learner's bankroll remains continuous.
+    stack: index === humanSeat ? old.stack : 200,
     streetBet: 0,
     committed: 0,
     hole: [] as Card[],
-    folded: old.stack <= 0,
-    allIn: old.stack <= 0,
+    folded: index === humanSeat && old.stack <= 0,
+    allIn: index === humanSeat && old.stack <= 0,
     acted: false,
     actedAtBet: null,
     voluntaryPreflop: false,
     raisedPreflop: false,
-    lastAction: old.stack <= 0 && index !== humanSeat ? "Seat open" : "",
-    stats: { ...old.stats, hands: old.stats.hands + (old.stack > 0 ? 1 : 0) },
+    lastAction: "",
+    stats: { ...old.stats, hands: old.stats.hands + (index !== humanSeat || old.stack > 0 ? 1 : 0) },
   }));
   if (players[humanSeat].stack <= 0) return { ...previous, players, status: "busted", result: "Your stack is gone. Review the session, then reset when you’re ready." };
 
   const seated = seatedSeats(players);
-  if (seated.length < 2) {
-    players.forEach((player, index) => {
-      player.stats.hands = previous.players[index].stats.hands;
-    });
-    return {
-      ...previous,
-      players,
-      currentActor: -1,
-      status: "tableClosed",
-      result: "The table has closed — no opponents remain.",
-    };
-  }
 
   const previousBigBlind = previous.players.findIndex((player) => player.position === "BB" && player.hole.length === 2);
   const headsUp = seated.length === 2;
@@ -438,6 +438,7 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
   const validation = validateAction(input, seatIndex, action);
   if (!validation.legal) return input;
   const state = structuredClone(input) as HandState;
+  const potBefore = potTotal(input);
   const player = state.players[seatIndex];
   const beforeToCall = toCallFor(state, seatIndex);
   const oldCurrentBet = state.currentBet;
@@ -522,6 +523,7 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
     amount: player.streetBet,
     toCallBefore: beforeToCall,
     raiseLevel: raiseLevelBefore,
+    potBefore,
   });
 
   append(state, `${player.name} · ${player.lastAction}`);
@@ -541,13 +543,16 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
 function awardUncontested(state: HandState) {
   const winner = state.players.find((player) => !player.folded)!;
   const pot = potTotal(state);
-  const profit = pot - winner.committed;
-  winner.stack += pot;
+  const rake = rakeFor(pot, state.board);
+  const awarded = pot - rake;
+  const profit = awarded - winner.committed;
+  winner.stack += awarded;
+  state.sessionRake += rake;
   winner.stats.handsWon += 1;
   state.players.forEach((player) => { player.committed = 0; player.streetBet = 0; });
   state.status = winner.isHuman && winner.stack <= 0 ? "busted" : "handOver";
   state.currentActor = -1;
-  state.result = `${winner.name} ${winner.isHuman ? "win" : "wins"} $${profit} uncontested`;
+  state.result = `${winner.name} ${winner.isHuman ? "win" : "wins"} $${profit} uncontested${rake ? ` · $${rake} rake` : ""}`;
   append(state, state.result);
   return state;
 }
@@ -648,6 +653,7 @@ function showdown(state: HandState): HandState {
   const descriptions = new Set<string>();
   const showdownWinners = new Set<number>();
   let contestedTotal = 0;
+  let handRake = 0;
   contributions.forEach((level) => {
     const contributors = state.players.filter((player) => player.committed >= level);
     const eligible = contributors.filter((player) => !player.folded);
@@ -659,12 +665,15 @@ function showdown(state: HandState): HandState {
       returns.set(index, (returns.get(index) ?? 0) + amount);
       return;
     }
-    contestedTotal += amount;
+    const layerRake = rakeFor(amount, state.board, CASH_RAKE.cap - handRake);
+    handRake += layerRake;
+    const distributable = amount - layerRake;
+    contestedTotal += distributable;
     const ranked = eligible.map((player) => ({ player, result: evaluateHand([...player.hole, ...state.board]) }));
     const best = ranked.reduce((top, item) => compareScores(item.result.score, top.result.score) > 0 ? item : top);
     const winners = ranked.filter((item) => compareScores(item.result.score, best.result.score) === 0);
-    const share = Math.floor(amount / winners.length);
-    let odd = amount - share * winners.length;
+    const share = Math.floor(distributable / winners.length);
+    let odd = distributable - share * winners.length;
     const clockwise = [...winners].sort((a, b) => clockwiseDistance(state.dealer, state.players.indexOf(a.player)) - clockwiseDistance(state.dealer, state.players.indexOf(b.player)));
     clockwise.forEach(({ player }) => {
       const playerIndex = state.players.indexOf(player);
@@ -675,6 +684,7 @@ function showdown(state: HandState): HandState {
   });
   awards.forEach((amount, index) => { state.players[index].stack += amount; });
   returns.forEach((amount, index) => { state.players[index].stack += amount; });
+  state.sessionRake += handRake;
   state.players.forEach((player, index) => {
     if (!player.folded) player.stats.showdowns += 1;
     if (showdownWinners.has(index)) {
@@ -688,7 +698,7 @@ function showdown(state: HandState): HandState {
   const returnText = [...returns.entries()]
     .map(([index, amount]) => `$${amount} returned to ${state.players[index].name}`)
     .join(" · ");
-  state.result = `${[...descriptions].join(" · ")} · $${contestedTotal} awarded${returnText ? ` · ${returnText}` : ""}`;
+  state.result = `${[...descriptions].join(" · ")} · $${contestedTotal} awarded${handRake ? ` · $${handRake} rake` : ""}${returnText ? ` · ${returnText}` : ""}`;
   append(state, state.result);
   return state;
 }
@@ -812,6 +822,8 @@ const DEEP_THREE_BET_RANGES = Object.fromEntries(Object.entries(DEEP_THREE_BET_S
 const DEEP_FOUR_BET_RANGE = expandRange("QQ+ AKs AKo");
 const DEEP_PREMIUM_STACK_OFF_RANGE = expandRange("KK+");
 const DEEP_FOUR_BET_CONTINUE_RANGE = expandRange("QQ+ AKs AKo");
+const BB_VS_SB_CONTINUE_RANGE = expandRange("22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s");
+const BB_VS_SB_THREE_BET_RANGE = expandRange("77+ A8s+ ATo+ KTs+ KQo QJs A5s A4s");
 
 export type PreflopPlan = {
   preferred: "fold" | "call" | "raise" | "all-in";
@@ -913,8 +925,17 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
   const effectiveStackBb = Math.round((Math.min(player.stack + player.streetBet, opponentStack || player.stack + player.streetBet) / 2) * 10) / 10;
   if (effectiveStackBb > 25) {
     if (state.raiseCount === 0) {
-      const limpers = preflopActions.filter((action) => action.type === "call" && action.raiseLevel === 0).length;
-      const preferred = DEEP_OPEN_RANGES[player.position].has(hand) ? "raise" : toCallFor(state, seatIndex) > 0 ? "fold" : "call";
+      const limperActions = preflopActions.filter((action) => action.type === "call" && action.raiseLevel === 0);
+      const limpers = limperActions.length;
+      const stickyLimp = limperActions.some((action) => {
+        const stats = state.players[action.seat].stats;
+        return stats.hands >= 25 && (stats.vpip - stats.pfr) / stats.hands >= 0.24;
+      });
+      const marginalOutOfPositionIsolation = limpers > 0
+        && stickyLimp
+        && (player.position === "SB" || player.position === "BB")
+        && preflopStrength(player.hole) < 0.84;
+      const preferred = DEEP_OPEN_RANGES[player.position].has(hand) && !marginalOutOfPositionIsolation ? "raise" : toCallFor(state, seatIndex) > 0 ? "fold" : "call";
       const scenario = limpers ? `${player.position} facing ${limpers} limper${limpers === 1 ? "" : "s"}` : `Unopened pot from ${player.position}`;
       if (preferred === "raise") return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is inside the ${player.position} ${limpers ? "isolation-raising" : "opening"} range.`, { raise: limpers ? 0.85 : 0.94, call: limpers ? 0.15 : 0.06 });
       if (preferred === "call") return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is outside the raising range, but checking the big blind or taking a very low-cost option is available.`, { call: 1 });
@@ -934,6 +955,15 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
       if (DEEP_FOUR_BET_RANGE.has(hand)) return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is strong enough to continue against the squeeze; prefer a value four-bet while retaining some calls.`, { raise: 0.62, call: 0.28, fold: 0.1 }, "High");
       if (hand === "JJ" || hand === "TT" || hand === "AQs" || hand === "AKo") return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is near the top of the cold-calling range, but the squeeze and original raiser still constrain the defense.`, { call: 0.42, fold: 0.48, raise: 0.1 });
       return preflopPlan(hand, effectiveStackBb, scenario, `Cold callers must defend tightly against a squeeze because both the squeezer and original raiser represent live ranges.`, { fold: 0.92, call: 0.08 });
+    }
+    if (state.raiseCount === 1 && player.position === "BB" && (openerPosition === "SB" || openerPosition === "BTN/SB")) {
+      if (BB_VS_SB_THREE_BET_RANGE.has(hand)) {
+        return preflopPlan(hand, effectiveStackBb, `BB defending against a ${openerPosition} open`, `${hand} is strong enough to mix a value or pressure three-bet against the small blind's wide opening range.`, { raise: 0.56, call: 0.4, fold: 0.04 });
+      }
+      if (BB_VS_SB_CONTINUE_RANGE.has(hand)) {
+        return preflopPlan(hand, effectiveStackBb, `BB defending against a ${openerPosition} open`, `${hand} receives a favorable price and closes the action against a wide small-blind range.`, { call: 0.78, raise: 0.04, fold: 0.18 });
+      }
+      return preflopPlan(hand, effectiveStackBb, `BB defending against a ${openerPosition} open`, `${hand} remains outside the modeled blind-defense range despite the favorable position and price.`, { fold: 0.94, call: 0.06 });
     }
     if (state.raiseCount === 1 && DEEP_THREE_BET_RANGES[openerPosition].has(hand)) {
       const premium = PREMIUM_SHORT_RANGE.has(hand);
@@ -1133,7 +1163,7 @@ function boardThroughStreet(board: Card[], street: Street) {
   return board.slice(0, count[street]);
 }
 
-function opponentRangeWeight(state: HandState, opponentIndex: number, cards: Card[]) {
+function opponentRangeWeight(state: HandState, opponentIndex: number, cards: Card[], includeSizing = true) {
   const opponent = state.players[opponentIndex];
   const strength = preflopStrength(cards);
   const preflop = (state.actionLog ?? []).filter((action) => action.street === "preflop" && action.seat === opponentIndex);
@@ -1163,8 +1193,13 @@ function opponentRangeWeight(state: HandState, opponentIndex: number, cards: Car
             : features.made === 1 ? 1.25
               : 0.5;
     const drawWeight = features.draw ? 1.45 : features.overcards > 0 && action.street === "flop" ? 1.08 : 0.78;
+    const sizeRatio = includeSizing && action.potBefore ? Math.max(0, action.amount - action.toCallBefore) / action.potBefore : 0.55;
+    const sizePolarization = sizeRatio >= 0.9 ? 1.38 : sizeRatio >= 0.6 ? 1.16 : sizeRatio <= 0.36 ? 0.88 : 1;
     if (action.type === "raise" || action.type === "all-in") {
-      weight *= madeWeight * (features.draw ? 1.18 : 1);
+      // Large bets polarize toward strong made hands and credible draws; small
+      // bets retain substantially more medium-strength range.
+      const polarWeight = features.made >= 2 || features.draw || features.blocker ? sizePolarization : 1 / sizePolarization;
+      weight *= madeWeight * polarWeight * (features.draw ? 1.18 : 1);
     } else if (action.type === "call") {
       weight *= Math.max(0.3, madeWeight * 0.72 + drawWeight * 0.65);
     } else if (action.type === "check") {
@@ -1190,6 +1225,35 @@ export function estimateRangeEquity(
     const rivals = context.opponents.map((opponent) => weightedHoleSample(
       available,
       (cards) => opponentRangeWeight(state, opponent, cards),
+      random,
+    ));
+    const completed = [...state.board];
+    while (completed.length < 5) completed.push(available.pop()!);
+    const hero = evaluateHand([...hole, ...completed]).score;
+    const scores = rivals.map((cards) => evaluateHand([...cards, ...completed]).score);
+    if (!scores.some((score) => compareScores(score, hero) > 0)) {
+      shares += 1 / (scores.filter((score) => compareScores(score, hero) === 0).length + 1);
+    }
+  }
+  return shares / iterations;
+}
+
+function estimateRangeEquityV7(
+  state: HandState,
+  seatIndex: number,
+  iterations = 72,
+  random: () => number = Math.random,
+) {
+  const hole = state.players[seatIndex].hole;
+  if (hole.length !== 2) return 0;
+  const context = buildBotContext(state, seatIndex);
+  const known = new Set([...hole, ...state.board].map(cardLabel));
+  let shares = 0;
+  for (let run = 0; run < iterations; run += 1) {
+    const available = shuffledDeck(random).filter((card) => !known.has(cardLabel(card)));
+    const rivals = context.opponents.map((opponent) => weightedHoleSample(
+      available,
+      (cards) => opponentRangeWeight(state, opponent, cards, false),
       random,
     ));
     const completed = [...state.board];
@@ -1599,7 +1663,7 @@ function decideBotV7FromPublicState(state: HandState, seatIndex: number, random:
   const context = buildBotContext(state, seatIndex);
   const bounds = legalBounds(state, seatIndex);
   const features = handFeatures(player.hole, context.board);
-  const equity = estimateRangeEquity(state, seatIndex, 56, random);
+  const equity = estimateRangeEquityV7(state, seatIndex, 56, random);
   const multiwayPenalty = Math.max(0, context.activePlayers - 2) * 0.028;
   const realization = context.inPosition ? 0.038 : -0.028;
   const drawRealization = features.draw && context.inPosition ? 0.02 : 0;
@@ -1609,7 +1673,8 @@ function decideBotV7FromPublicState(state: HandState, seatIndex: number, random:
   const wetness = boardWetness(context.board);
   const headsUp = context.activePlayers === 2;
   const pressure = bounds.toCall / Math.max(1, player.stack + bounds.toCall);
-  const observed = context.opponents.map((index) => state.players[index].stats);
+  const readTargets = context.opponents;
+  const observed = readTargets.map((index) => state.players[index].stats);
   const opponentSamples = observed.reduce((sum, stats) => sum + Math.min(60, stats.hands), 0);
   const observedVpips = observed.reduce((sum, stats) => sum + (stats.hands ? stats.vpip / stats.hands : 0.24), 0) / Math.max(1, observed.length);
   const observedPfrs = observed.reduce((sum, stats) => sum + (stats.hands ? stats.pfr / stats.hands : 0.18), 0) / Math.max(1, observed.length);
@@ -1672,22 +1737,9 @@ export function decideBotV7(state: HandState, seatIndex: number, random: () => n
   return decideBotV7FromPublicState(publicState, seatIndex, random);
 }
 
-function preflopDecision(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  const plan = analyzePreflopSpot(state, seatIndex);
-  if (!plan || plan.effectiveStackBb > 25) return preflopDecisionV7(state, seatIndex, random);
-  if (plan.preferred === "all-in") {
-    if (plan.confidence === "High" || random() < ({ balanced: 0.9, tag: 0.94, lag: 0.96, nit: 0.86, caller: 0.78 } as Record<BotProfile, number>)[state.players[seatIndex].profile]) {
-      return { type: "all-in" };
-    }
-    return toCallFor(state, seatIndex) > 0 ? { type: "call" } : contextualPreflopRaise(state, seatIndex);
-  }
-  if (plan.preferred === "raise") return contextualPreflopRaise(state, seatIndex);
-  if (plan.preferred === "call") return toCallFor(state, seatIndex) > 0 ? { type: "call" } : { type: "check" };
-  return toCallFor(state, seatIndex) > 0 ? { type: "fold" } : { type: "check" };
-}
-
 function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  if (state.street === "preflop") return preflopDecision(state, seatIndex, random);
+  // Keep the frozen policy live until a candidate clears the paired,
+  // seat-swapped non-inferiority benchmark at every stack depth and street.
   return decideBotV7FromPublicState(state, seatIndex, random);
 }
 
@@ -1874,7 +1926,7 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 7
+  return candidate.version === 8
     && typeof candidate.raiseCount === "number"
     && Array.isArray(candidate.actionLog)
     && Array.isArray(candidate.players)
@@ -1883,17 +1935,18 @@ export function isValidSavedState(value: unknown): value is HandState {
     && Array.isArray(candidate.deck)
     && Array.isArray(candidate.board)
     && Array.isArray(candidate.reviews)
-    && Array.isArray(candidate.reviewArchive);
+    && Array.isArray(candidate.reviewArchive)
+    && typeof candidate.sessionRake === "number";
 }
 
 export function migrateSavedState(value: unknown): HandState | null {
   if (isValidSavedState(value)) return value;
   if (!value || typeof value !== "object") return null;
   const legacy = value as Omit<Partial<HandState>, "version"> & { version?: number };
-  if (![4, 5, 6].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
+  if (![4, 5, 6, 7].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
   const migrated = {
     ...legacy,
-    version: 7,
+    version: 8,
     players: legacy.players.map((player) => ({
       ...player,
       stats: { ...emptyStats(), ...player.stats },
@@ -1905,6 +1958,7 @@ export function migrateSavedState(value: unknown): HandState | null {
     actionLog: legacy.actionLog ?? [],
     reviews: [],
     reviewArchive: [],
+    sessionRake: legacy.sessionRake ?? 0,
   } as HandState;
   // A v4 in-progress hand lacks the public action sequence required by the
   // new range model. Preserve bankroll and statistics, then begin a clean hand.

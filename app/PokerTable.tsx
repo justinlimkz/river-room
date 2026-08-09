@@ -21,8 +21,8 @@ import {
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v7";
-const LEGACY_STORAGE_KEYS = ["riverroom-session-v6", "riverroom-session-v5", "riverroom-session-v4"];
+const STORAGE_KEY = "riverroom-session-v8";
+const LEGACY_STORAGE_KEYS = ["riverroom-session-v7", "riverroom-session-v6", "riverroom-session-v5", "riverroom-session-v4"];
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 
@@ -124,12 +124,13 @@ function RulesPanel({ onClose }: { onClose: () => void }) {
           <button className="icon-button" onClick={onClose} aria-label="Close table rules">×</button>
         </div>
         <div className="rules-list">
-          <p><strong>Format</strong><span>Six seats, $200 initial stacks, table stakes, no rake, and no blind escalation.</span></p>
+          <p><strong>Format</strong><span>Six seats, $200 initial stacks, table stakes, and no blind escalation. Opponents automatically top back up to 100 BB between hands.</span></p>
+          <p><strong>Online rake</strong><span>Five percent of postflop pots, capped at $3 per hand. No flop, no drop; uncalled wagers are never raked.</span></p>
           <p><strong>Betting</strong><span>No cap on raises. A full raise establishes the next minimum; cumulative short all-ins reopen action only after totaling a full raise.</span></p>
           <p><strong>All-ins</strong><span>Main and side pots are awarded independently. Uncalled excess is returned before the contested pot is described.</span></p>
           <p><strong>Showdown</strong><span>The best five-card Hold’em hand wins. Ties split the pot; an odd chip goes to the first tied winner clockwise left of the button.</span></p>
-          <p><strong>Seats</strong><span>Busted opponents leave. The moving button skips empty seats, with a heads-up adjustment that prevents the same player posting the big blind twice.</span></p>
-          <p><strong>Not offered</strong><span>No straddles, missed-blind posting, buying the button, running it twice, rabbit hunting, or automatic opponent rebuys.</span></p>
+          <p><strong>Seats</strong><span>The table remains six-handed. Opponent bankrolls are replenished between hands; your bankroll is continuous until you bust or reset.</span></p>
+          <p><strong>Not offered</strong><span>No straddles, missed-blind posting, buying the button, running it twice, or rabbit hunting.</span></p>
         </div>
         <button className="primary wide" onClick={onClose}>Back to table</button>
       </div>
@@ -330,6 +331,7 @@ export default function PokerTable() {
               <div><strong>${state.players[humanSeat].stack - state.sessionStart >= 0 ? "+" : ""}{state.players[humanSeat].stack - state.sessionStart}</strong><small>NET CHIPS</small></div>
               <div><strong>{state.sessionHands}</strong><small>HANDS</small></div>
             </div>
+            <small className="stat-note">Online cash model · 5% capped rake · ${state.sessionRake} removed from table pots</small>
             <div className="stat-grid">
               <div title={`${heroStats.vpip} of ${heroStats.hands} hands`}><strong>{percent(heroStats.vpip, heroStats.hands)}</strong><small>VPIP</small></div>
               <div title={`${heroStats.pfr} of ${heroStats.hands} hands`}><strong>{percent(heroStats.pfr, heroStats.hands)}</strong><small>PFR</small></div>

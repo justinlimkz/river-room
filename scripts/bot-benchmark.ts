@@ -9,7 +9,7 @@ import {
   type HandState,
 } from "../app/poker-engine";
 
-type Result = { profit: number; decisions: number };
+type Result = { candidateProfit: number; predecessorProfit: number; decisions: number };
 const profiles: BotProfile[] = ["balanced", "tag", "lag", "nit", "caller", "balanced"];
 
 function runHand(seed: number, upgraded: Set<number>, profile: BotProfile | "mixed", startingStack: number): Result {
@@ -30,12 +30,13 @@ function runHand(seed: number, upgraded: Set<number>, profile: BotProfile | "mix
     decisions += 1;
   }
   if (decisions >= 180) throw new Error(`Action loop at seed ${seed}`);
-  const conserved = state.players.reduce((sum, player) => sum + player.stack, 0) + potTotal(state);
+  const conserved = state.players.reduce((sum, player) => sum + player.stack, 0) + potTotal(state) + state.sessionRake;
   if (conserved !== startingStack * 6) throw new Error(`Chip conservation failed at seed ${seed}: ${conserved}`);
-  return {
-    profit: [...upgraded].reduce((sum, seat) => sum + state.players[seat].stack - startingStack, 0),
-    decisions,
-  };
+  const candidateProfit = [...upgraded].reduce((sum, seat) => sum + state.players[seat].stack - startingStack, 0);
+  const predecessorProfit = state.players.reduce((sum, player, seat) => (
+    upgraded.has(seat) ? sum : sum + player.stack - startingStack
+  ), 0);
+  return { candidateProfit, predecessorProfit, decisions };
 }
 
 function summarize(profile: BotProfile | "mixed", deals: number, seedOffset: number, startingStack: number) {
@@ -45,8 +46,12 @@ function summarize(profile: BotProfile | "mixed", deals: number, seedOffset: num
     const seed = seedOffset + deal;
     const first = runHand(seed, new Set([0, 2, 4]), profile, startingStack);
     const second = runHand(seed, new Set([1, 3, 5]), profile, startingStack);
-    // Across the swapped pair, six upgraded seat-hands face six legacy seat-hands.
-    samples.push((first.profit + second.profit) / 6);
+    // Center each strategy against its opponents so shared rake cancels. Across
+    // the swapped pair there are six candidate and six predecessor seat-hands;
+    // identical policies therefore score exactly zero.
+    const differential = (first.candidateProfit - first.predecessorProfit)
+      + (second.candidateProfit - second.predecessorProfit);
+    samples.push(differential / 12);
     decisions += first.decisions + second.decisions;
   }
   const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length;

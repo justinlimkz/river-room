@@ -6,9 +6,9 @@ River Room models a six-seat $1/$2 no-limit Texas Hold'em cash table. These rule
 
 - Every player begins a new session with $200 (100 BB). Chips are training chips and have no cash value.
 - The game uses table stakes and integer-dollar chips. A player may wager no more than the chips in front of them.
-- There is no rake, jackpot drop, ante, or blind escalation.
-- Busted opponents leave. Empty seats are skipped by the moving button, blinds, deal, and action.
-- The game continues short-handed. Heads-up, the button posts the small blind, acts first preflop, and acts last postflop. The transition is adjusted so a player never posts the big blind twice consecutively.
+- River Room removes 5% from postflop pots, capped at $3 per hand. There is no rake when a hand ends before the flop, and returned uncalled excess is not raked. There is no jackpot drop, ante, or blind escalation.
+- Between hands, every bot is automatically topped up to $200 (100 BB). The learner's bankroll is never topped up automatically, so session results remain continuous.
+- The table remains six-handed until the learner is busted or resets the session.
 
 ## Deal and action
 
@@ -34,4 +34,4 @@ River Room models a six-seat $1/$2 no-limit Texas Hold'em cash table. These rule
 
 ## Unsupported optional cash-game rules
 
-River Room does not currently offer straddles, missed-blind obligations, buying the button, running a board more than once, rabbit hunting, automatic opponent rebuys, cash added during a hand, or verbal-action and exposed-card procedures.
+River Room does not currently offer straddles, missed-blind obligations, buying the button, running a board more than once, rabbit hunting, cash added during a hand, or verbal-action and exposed-card procedures.
