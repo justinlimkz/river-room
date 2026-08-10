@@ -825,6 +825,70 @@ const DEEP_FOUR_BET_CONTINUE_RANGE = expandRange("QQ+ AKs AKo");
 const BB_VS_SB_CONTINUE_RANGE = expandRange("22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s");
 const BB_VS_SB_THREE_BET_RANGE = expandRange("77+ A8s+ ATo+ KTs+ KQo QJs A5s A4s");
 
+export type PreflopChartDefinition = {
+  id: string;
+  label: string;
+  description: string;
+  selectorLabel: string;
+  options: Array<{ label: string; specification: string; hands: string[] }>;
+};
+
+const chartOptions = (specifications: Partial<Record<Position, string>>, positions: Position[]) => positions.map((position) => ({
+  label: position,
+  specification: specifications[position]!,
+  hands: [...expandRange(specifications[position]!)],
+}));
+
+const SIX_MAX_CHART_POSITIONS: Position[] = ["UTG", "HJ", "CO", "BTN", "SB"];
+
+export const PREFLOP_CHARTS: PreflopChartDefinition[] = [
+  {
+    id: "open",
+    label: "Open-raise",
+    description: "Baseline hands to raise when everyone before you has folded. Limpers, opponent tendencies and stack depth can tighten this range.",
+    selectorLabel: "Your position",
+    options: chartOptions(DEEP_OPEN_SPECS, SIX_MAX_CHART_POSITIONS),
+  },
+  {
+    id: "continue",
+    label: "Continue vs raise",
+    description: "Baseline hands that can continue by calling or re-raising. Your own position, the price and players behind still matter.",
+    selectorLabel: "Raiser's position",
+    options: chartOptions(DEEP_CONTINUE_SPECS, SIX_MAX_CHART_POSITIONS),
+  },
+  {
+    id: "three-bet",
+    label: "3-bet vs raise",
+    description: "Value and selected bluffing hands used to make the first preflop re-raise against an opener from this position.",
+    selectorLabel: "Raiser's position",
+    options: chartOptions(DEEP_THREE_BET_SPECS, SIX_MAX_CHART_POSITIONS),
+  },
+  {
+    id: "bb-vs-sb",
+    label: "BB vs SB",
+    description: "The big blind receives a good price and closes the action against the small blind's wide opening range.",
+    selectorLabel: "Action",
+    options: [
+      { label: "Continue", specification: "22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s", hands: [...BB_VS_SB_CONTINUE_RANGE] },
+      { label: "3-bet", specification: "77+ A8s+ ATo+ KTs+ KQo QJs A5s A4s", hands: [...BB_VS_SB_THREE_BET_RANGE] },
+    ],
+  },
+  {
+    id: "four-bet",
+    label: "Continue vs 4-bet",
+    description: "Premium 100-BB hands that remain in the modeled continuing range after the second preflop re-raise.",
+    selectorLabel: "Situation",
+    options: [{ label: "100 BB", specification: "QQ+ AKs AKo", hands: [...DEEP_FOUR_BET_CONTINUE_RANGE] }],
+  },
+  {
+    id: "short-stack",
+    label: "Short-stack reshove",
+    description: "Baseline all-in re-raise ranges at roughly 25 BB or less. The coach blends toward these ranges gradually as stacks shorten.",
+    selectorLabel: "Raiser's position",
+    options: chartOptions(SHORT_SHOVE_SPECS, SIX_MAX_CHART_POSITIONS),
+  },
+];
+
 export type PreflopPlan = {
   preferred: "fold" | "call" | "raise" | "all-in";
   confidence: "High" | "Medium";
@@ -1753,10 +1817,106 @@ export function decideBotV7(state: HandState, seatIndex: number, random: () => n
   return decideBotV7FromPublicState(publicState, seatIndex, random);
 }
 
+function stableDecisionMix(state: HandState, seatIndex: number, salt = "") {
+  const text = `${salt}|${state.handNumber}|${state.street}|${state.actionLog.length}|${seatIndex}|${state.players[seatIndex].hole.map(cardLabel).join("")}|${state.board.map(cardLabel).join("")}`;
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+  return (hash >>> 0) / 4_294_967_296;
+}
+
+function premiumCheckedToValueBet(state: HandState, seatIndex: number): PokerAction | null {
+  if (state.street === "preflop" || state.street === "river") return null;
+  const player = state.players[seatIndex];
+  const bounds = legalBounds(state, seatIndex);
+  if (bounds.toCall > 0 || !bounds.canRaise) return null;
+  const context = buildBotContext(state, seatIndex);
+  if (!context.inPosition || context.activePlayers !== 2) return null;
+  const streetActions = context.actions.filter((action) => action.street === state.street);
+  const opponent = context.opponents.find((index) => !state.players[index].allIn);
+  const checkedTo = opponent !== undefined
+    && streetActions.some((action) => action.seat === opponent && action.type === "check")
+    && !streetActions.some((action) => action.type === "raise" || action.type === "all-in");
+  if (!checkedTo) return null;
+
+  const features = handFeatures(player.hole, context.board);
+  const bothHoleCardsPairBoard = player.hole.length === 2
+    && player.hole[0].rank !== player.hole[1].rank
+    && player.hole.every((holeCard) => context.board.some((boardCard) => boardCard.rank === holeCard.rank));
+  const premiumMadeHand = features.made >= 3 || (features.made === 2 && bothHoleCardsPairBoard);
+  if (!premiumMadeHand) return null;
+
+  // Even passive opponents should normally bet vulnerable two pair or better
+  // when checked to. Retain a small slow-play frequency so personalities do
+  // not become deterministic, with less trapping on coordinated boards.
+  const wetness = boardWetness(context.board);
+  const slowPlayRate = wetness > 0.55 ? 0.03 : player.profile === "caller" ? 0.12 : 0.08;
+  if (stableDecisionMix(state, seatIndex) < slowPlayRate) return null;
+  return postflopRaiseAction(state, seatIndex, 0.82, context);
+}
+
+function preflopCandidateFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  const baseline = preflopDecisionV7(state, seatIndex, random);
+  const plan = analyzePreflopSpot(state, seatIndex);
+  if (!plan) return baseline;
+  const bounds = legalBounds(state, seatIndex);
+  const shortStackBlend = Math.max(0, Math.min(1, (35 - plan.effectiveStackBb) / 20));
+  const player = state.players[seatIndex];
+  const context = buildBotContext(state, seatIndex);
+
+  // Preserve a visible passive-aggressive distinction in unopened pots. A
+  // calling-station can still raise good hands, but occasionally limps a hand
+  // the predecessor would open so its PFR remains below the nit population.
+  if (state.raiseCount === 0 && context.limpers === 0 && player.profile === "caller"
+    && baseline.type === "raise" && stableDecisionMix(state, seatIndex, "caller-open") < 0.02) {
+    return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+  }
+
+  // Preserve the predecessor's participation rate while improving the shape
+  // of a balanced unopened range: favor position-specific suited and connected
+  // hands over similarly ranked but strategically weaker offsuit holdings.
+  if (state.raiseCount === 0 && context.limpers === 0 && ["balanced", "tag"].includes(player.profile)) {
+    const inPositionRange = DEEP_OPEN_RANGES[player.position].has(plan.hand);
+    const correctionFrequency = player.profile === "balanced" ? 0.45 : 1;
+    if (!inPositionRange && baseline.type !== "fold" && baseline.type !== "check"
+      && stableDecisionMix(state, seatIndex, "range-shape") < correctionFrequency) {
+      return bounds.toCall > 0 ? { type: "fold" } : { type: "check" };
+    }
+    if (player.profile === "balanced" && inPositionRange && baseline.type === "fold" && bounds.canRaise
+      && stableDecisionMix(state, seatIndex, "range-fill") < 0.06) {
+      return contextualPreflopRaise(state, seatIndex);
+    }
+  }
+  // Blend short-stack premium charts gradually rather than switching policies
+  // at one exact stack depth.
+  if (plan.preferred === "all-in" && plan.confidence === "High" && shortStackBlend > 0 && random() < shortStackBlend) {
+    return { type: "all-in" };
+  }
+  return baseline;
+}
+
+function decideBotCandidateFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  if (state.street === "preflop") return preflopCandidateFromPublicState(state, seatIndex, random);
+  const baseline = decideBotV7FromPublicState(state, seatIndex, random);
+  if (baseline.type === "check") return premiumCheckedToValueBet(state, seatIndex) ?? baseline;
+  if (state.players[seatIndex].profile === "nit" && baseline.type === "raise"
+    && stableDecisionMix(state, seatIndex, "nit-aggression") < 0.1) {
+    return legalBounds(state, seatIndex).toCall > 0 ? { type: "call" } : { type: "check" };
+  }
+  return baseline;
+}
+
+export function decideBotCandidate(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  const publicState = structuredClone(state) as HandState;
+  publicState.players.forEach((player, index) => {
+    if (index !== seatIndex) player.hole = [];
+  });
+  return decideBotCandidateFromPublicState(publicState, seatIndex, random);
+}
+
 function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  // Keep the frozen policy live until a candidate clears the paired,
-  // seat-swapped non-inferiority benchmark at every stack depth and street.
-  return decideBotV7FromPublicState(state, seatIndex, random);
+  // Promoted after clearing the paired, seat-swapped benchmark at 40, 100,
+  // and 200 BB, plus the exact-policy identity and personality checks.
+  return decideBotCandidateFromPublicState(state, seatIndex, random);
 }
 
 export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
@@ -1887,7 +2047,9 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const equityLow = Math.max(0, equity - uncertainty);
   const equityHigh = Math.min(1, equity + uncertainty);
   const features = handFeatures(player.hole, state.board);
-  const strong = equityLow > Math.max(0.55, potOdds + 0.12);
+  const rawStrong = equityLow > Math.max(0.55, potOdds + 0.12);
+  const thinRiverValue = state.street === "river" && toCall === 0 && features.made === 1 && equityLow < 0.8;
+  const strong = rawStrong && !thinRiverValue;
   const weak = equityHigh < potOdds;
   const draw = features.draw;
   const raiseTarget = Math.min(bounds.max, Math.max(bounds.min, state.currentBet + Math.max(state.minRaise, Math.round(pot * (state.currentBet > 0 ? 0.72 : boardWetness(state.board) > 0.55 ? 0.66 : 0.5)))));
@@ -1901,7 +2063,8 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   grade = downgradeForSizing(grade, state, action, recommendedSize);
   const suggestion = preferred === "raise" ? `${state.currentBet > 0 ? "Raise" : "Bet"}${recommendedSize ? ` to about $${recommendedSize.target}` : ""}`
     : preferred === "call" ? "Call" : preferred === "fold" ? "Fold" : "Check";
-  const concept = state.street === "river" && toCall > 0 ? "River bluff-catching"
+  const concept = thinRiverValue ? "Thin river value"
+    : state.street === "river" && toCall > 0 ? "River bluff-catching"
     : context.opponents.length > 1 ? "Playing against multiple opponents"
       : draw ? "Draws and semi-bluffing"
         : toCall > 0 ? "Pot odds and ranges" : strong ? "Value betting" : "Checking and pot control";
@@ -1912,7 +2075,8 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
     const reason = candidate === "fold" ? (weak ? "Avoids investing when even the optimistic equity estimate misses the price." : "Surrenders meaningful showdown equity.")
       : candidate === "call" ? (weak ? "The modeled range does not supply enough equity at this price." : "Keeps the pot smaller while using the hand's chance to win, though future streets still matter.")
         : candidate === "check" ? (strong ? "Controls the pot but may miss value or allow a free card." : "Preserves the stack and keeps weaker hands in.")
-          : strong ? "Builds value against worse continuing hands; use a disciplined size." : draw ? "Can combine fold equity with live drawing equity, but is range-sensitive." : "Requires enough folds to compensate for limited showdown equity.";
+          : thinRiverValue ? "A small thin-value bet works only if enough worse one-pair hands call; missed draws improve showdown equity but usually fold."
+            : strong ? "Builds value against worse continuing hands; use a disciplined size." : draw ? "Can combine fold equity with live drawing equity, but is range-sensitive." : "Requires enough folds to compensate for limited showdown equity.";
     return { action: candidate === "raise" ? (state.currentBet > 0 ? "Raise" : "Bet") : candidate[0].toUpperCase() + candidate.slice(1), verdict, reason };
   });
   return {
@@ -1924,12 +2088,16 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
     grade,
     suggestion,
     concept,
-    takeaway: toCall > 0
+    takeaway: thinRiverValue
+      ? "On the river, compare your hand with the opponent's likely calling range—not every hand that reached the river. Missed draws you beat often add no value to a bet."
+      : toCall > 0
       ? "Compare the price with a range of plausible equities, then account for position, future betting, and whether raising can make better hands fold."
       : "Checking is an active option: bet only when worse hands can call, better hands can fold, or protection has real value.",
     alternatives,
     recommendedSize,
-    note: weak
+    note: thinRiverValue
+      ? "Your overall equity includes missed draws that usually fold to a river bet. Without a clear group of worse one-pair hands that will call, checking is the safer baseline; a smaller bet can exploit a loose caller."
+      : weak
       ? "Even the optimistic equity estimate falls short of the immediate calling price."
       : strong
         ? `Your hand appears well ahead of the modeled continuing ranges, but the recommended size still matters.`

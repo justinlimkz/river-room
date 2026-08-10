@@ -8,15 +8,16 @@ import {
   CLOCKWISE_SEATS,
   createSession,
   decideBot,
+  decideBotCandidate,
   decideBotLegacy,
   decideBotV6,
-  decideBotV7,
   estimateRangeEquity,
   estimateRangeEquityV6,
   evaluateHand,
   humanSeat,
   legalBounds,
   migrateSavedState,
+  PREFLOP_CHARTS,
   potTotal,
   seededRandom,
   shuffledDeck,
@@ -63,6 +64,18 @@ test("two sets correctly make a full house using the lower set as the pair", () 
   ]);
   assert.equal(result.name, "Full house");
   assert.deepEqual(result.score, [6, 14, 13]);
+});
+
+test("published preflop charts expose the coach's exact positional ranges", () => {
+  const opens = PREFLOP_CHARTS.find((chart) => chart.id === "open")!;
+  const utg = opens.options.find((option) => option.label === "UTG")!;
+  const button = opens.options.find((option) => option.label === "BTN")!;
+  const smallBlind = opens.options.find((option) => option.label === "SB")!;
+  assert.ok(button.hands.length > smallBlind.hands.length);
+  assert.ok(smallBlind.hands.length > utg.hands.length);
+  assert.equal(button.hands.includes("A7o"), true);
+  assert.equal(utg.hands.includes("A7o"), false);
+  assert.equal(PREFLOP_CHARTS.find((chart) => chart.id === "bb-vs-sb")!.options.find((option) => option.label === "Continue")!.hands.includes("K7o"), true);
 });
 
 test("all 2,598,960 five-card combinations match canonical category counts", () => {
@@ -425,7 +438,7 @@ test("passive profiles sometimes stab after the aggressor checks to them", () =>
   assert.ok(revisedBets > priorBets + 25, `prior ${priorBets}, revised ${revisedBets}`);
 });
 
-test("postflop play retains the benchmarked predecessor until a replacement clears the gate", () => {
+test("live postflop play uses the benchmark-cleared candidate", () => {
   const state = createSession(seededRandom(815));
   const actor = state.players.findIndex((player) => player.position === "BTN");
   const opponent = state.players.findIndex((player) => player.position === "BB");
@@ -449,9 +462,42 @@ test("postflop play retains the benchmarked predecessor until a replacement clea
   ];
   for (let seed = 1; seed <= 240; seed += 1) {
     const current = decideBot(state, actor, seededRandom(seed));
-    const predecessor = decideBotV7(state, actor, seededRandom(seed));
-    assert.deepEqual(current, predecessor);
+    const candidate = decideBotCandidate(state, actor, seededRandom(seed));
+    assert.deepEqual(current, candidate);
   }
+});
+
+test("even a passive caller usually value-bets vulnerable top two pair when checked to", () => {
+  const state = createSession(seededRandom(816));
+  const actor = state.players.findIndex((player) => player.position === "CO");
+  const opponent = state.players.findIndex((player) => player.position === "HJ");
+  state.street = "flop";
+  state.currentActor = actor;
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.board = [card("Q", "hearts"), card("K", "diamonds"), card("A", "hearts")];
+  state.players.forEach((player, index) => {
+    player.folded = index !== actor && index !== opponent;
+    player.committed = index === actor || index === opponent ? (index === actor ? 4 : 6) : 0;
+    player.streetBet = 0;
+  });
+  state.players[actor].profile = "caller";
+  state.players[actor].hole = [card("K", "clubs"), card("Q", "diamonds")];
+  state.players[opponent].hole = [card("3", "spades"), card("3", "clubs")];
+  state.preflopAggressor = opponent;
+  state.actionLog = [
+    { street: "preflop", seat: opponent, type: "raise", amount: 4, toCallBefore: 2, raiseLevel: 0, potBefore: 3 },
+    { street: "preflop", seat: actor, type: "call", amount: 4, toCallBefore: 4, raiseLevel: 1, potBefore: 7 },
+    { street: "flop", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0, potBefore: 11 },
+  ];
+
+  let valueBets = 0;
+  for (let seed = 1; seed <= 300; seed += 1) {
+    const action = decideBot(state, actor, seededRandom(seed));
+    assert.equal(validateAction(state, actor, action).legal, true);
+    if (action.type === "raise" || action.type === "all-in") valueBets += 1;
+  }
+  assert.ok(valueBets >= 270, `value bets ${valueBets}/300`);
 });
 
 test("passive BTN players raise strong playable opens more often", () => {
@@ -569,7 +615,7 @@ test("BB defends materially wider against SB than against UTG", () => {
   assert.ok(versusSb > versusUtg + 0.16, `SB ${versusSb}, UTG ${versusUtg}`);
 });
 
-test("short-stack coaching identifies the JJ reshove without bypassing the bot quality gate", () => {
+test("short-stack coaching and the promoted bot policy agree on the JJ reshove", () => {
   const state = createSession(seededRandom(902));
   const actor = state.players.findIndex((player) => player.position === "BB");
   const opener = state.players.findIndex((player) => player.position === "SB");
@@ -592,7 +638,7 @@ test("short-stack coaching identifies the JJ reshove without bypassing the bot q
   assert.equal(analyzePreflopSpot(state, actor)?.preferred, "all-in");
   for (const profile of ["balanced", "tag", "lag", "nit", "caller"] as BotProfile[]) {
     state.players[actor].profile = profile;
-    assert.deepEqual(decideBot(state, actor, seededRandom(1)), decideBotV7(state, actor, seededRandom(1)), profile);
+    assert.deepEqual(decideBot(state, actor, seededRandom(1)), decideBotCandidate(state, actor, seededRandom(1)), profile);
   }
 });
 
@@ -842,6 +888,39 @@ test("postflop coaching is deterministic and never uses an opponent's hidden car
   assert.match(firstReview.basis!, /repeatable simulated deals/);
 });
 
+test("river coaching does not confuse equity versus all hands with value versus a calling range", () => {
+  const state = createSession(seededRandom(918));
+  const opponent = state.players.findIndex((player) => player.position === "CO");
+  state.street = "river";
+  state.board = [card("T", "clubs"), card("Q", "spades"), card("9", "clubs"), card("5", "hearts"), card("2", "spades")];
+  state.currentActor = humanSeat;
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.players.forEach((player, index) => {
+    player.folded = index !== humanSeat && index !== opponent;
+    player.streetBet = 0;
+    player.committed = index === humanSeat || index === opponent ? 22 : index < 2 ? index + 1 : 0;
+  });
+  state.players[humanSeat].position = "HJ";
+  state.players[humanSeat].hole = [card("K", "clubs"), card("K", "hearts")];
+  state.players[opponent].position = "CO";
+  state.players[opponent].hole = [card("A", "hearts"), card("J", "hearts")];
+  state.actionLog = [
+    { street: "preflop", seat: humanSeat, type: "raise", amount: 4, toCallBefore: 2, raiseLevel: 0 },
+    { street: "preflop", seat: opponent, type: "call", amount: 4, toCallBefore: 4, raiseLevel: 1 },
+    { street: "flop", seat: humanSeat, type: "raise", amount: 6, toCallBefore: 0, raiseLevel: 0 },
+    { street: "flop", seat: opponent, type: "call", amount: 6, toCallBefore: 6, raiseLevel: 1 },
+    { street: "turn", seat: humanSeat, type: "raise", amount: 12, toCallBefore: 0, raiseLevel: 0 },
+    { street: "turn", seat: opponent, type: "call", amount: 12, toCallBefore: 12, raiseLevel: 1 },
+  ];
+  const review = applyAction(state, humanSeat, { type: "check" }).reviews[0];
+  assert.equal(review.grade, "Preferred");
+  assert.equal(review.suggestion, "Check");
+  assert.equal(review.concept, "Thin river value");
+  assert.match(review.note, /missed draws that usually fold/);
+  assert.match(review.takeaway, /calling range/);
+});
+
 test("an unjustified deep-stack postflop all-in is never allowed to look reasonable", () => {
   const state = postflopCoachingSpot();
   state.players[humanSeat].hole = [card("7", "clubs"), card("2", "clubs")];
@@ -862,7 +941,7 @@ test("completed-hand decisions move into the capped learning archive", () => {
   assert.equal(next.reviewArchive[0].handNumber, state.handNumber);
 });
 
-test("deep-stack bots retain the benchmarked predecessor until a replacement clears the gate", () => {
+test("deep-stack live bots exactly match the promoted candidate and stay legal", () => {
   const random = seededRandom(903);
   for (let run = 0; run < 300; run += 1) {
     const state = aqoFacingThreeBetSpot({ squeeze: run % 2 === 0 });
@@ -870,9 +949,9 @@ test("deep-stack bots retain the benchmarked predecessor until a replacement cle
     state.players[actor].hole = shuffledDeck(random).slice(0, 2);
     const seed = 20_000 + run;
     const current = decideBot(state, actor, seededRandom(seed));
-    const predecessor = decideBotV7(state, actor, seededRandom(seed));
+    const candidate = decideBotCandidate(state, actor, seededRandom(seed));
     assert.equal(validateAction(state, actor, current).legal, true);
-    assert.deepEqual(current, predecessor);
+    assert.deepEqual(current, candidate);
   }
 });
 
@@ -1016,7 +1095,7 @@ test("preflop bot populations have distinct realistic frequencies and escalation
   assert.ok(rate("balanced", "vpip") >= 0.19 && rate("balanced", "vpip") <= 0.29, ratesMessage);
   assert.ok(rate("lag", "vpip") >= 0.25 && rate("lag", "vpip") <= 0.37, ratesMessage);
   assert.ok(rate("caller", "vpip") >= 0.26 && rate("caller", "vpip") <= 0.39, ratesMessage);
-  assert.ok(rate("caller", "pfr") < rate("nit", "pfr"));
+  assert.ok(rate("caller", "pfr") < rate("nit", "pfr"), ratesMessage);
   assert.ok(rate("nit", "pfr") < rate("balanced", "pfr"));
   assert.ok(rate("balanced", "pfr") < rate("lag", "pfr"));
   assert.ok(threeBetRate("caller") < threeBetRate("balanced"));
@@ -1063,8 +1142,9 @@ test("postflop profiles separate calling, folding, and aggression without extrem
   }
   const aggression = (profile: BotProfile) => metrics.get(profile)!.aggressive / metrics.get(profile)!.actions;
   const foldRate = (profile: BotProfile) => metrics.get(profile)!.folds / metrics.get(profile)!.facing;
-  assert.ok(aggression("caller") < aggression("nit"));
-  assert.ok(aggression("nit") < aggression("balanced"));
+  const profileMessage = JSON.stringify(Object.fromEntries((["caller", "nit", "balanced", "lag"] as BotProfile[]).map((profile) => [profile, { aggression: aggression(profile), fold: foldRate(profile) }])));
+  assert.ok(aggression("caller") < aggression("nit"), profileMessage);
+  assert.ok(aggression("nit") < aggression("balanced"), profileMessage);
   assert.ok(aggression("balanced") < aggression("lag"));
   assert.ok(foldRate("caller") < foldRate("balanced"));
   // A nit reaches postflop with a stronger range, so its population fold rate

@@ -198,6 +198,19 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
 .rules-list { display: grid; gap: 8px; margin: 2px 0 16px; }
 .rules-list p { display: grid; grid-template-columns: 96px 1fr; gap: 12px; margin: 0; padding: 10px 0; border-bottom: 1px solid var(--line); color: #aab3ae; font-size: 11px; line-height: 1.45; }
 .rules-list strong { color: var(--ink); }
+.charts-panel { width: min(820px, 100%); }
+.chart-tabs { display: flex; flex-wrap: wrap; gap: 5px; margin: 12px 0; }
+.chart-tabs button { border: 1px solid var(--line); border-radius: 7px; background: #121a17; color: #8d9993; padding: 7px 9px; font-size: 9px; cursor: pointer; }
+.chart-tabs button.selected { border-color: rgba(209,173,106,.65); background: rgba(209,173,106,.12); color: #e2c88f; }
+.chart-heading { display: flex; justify-content: space-between; align-items: end; gap: 18px; margin: 12px 0 10px; }
+.chart-heading strong { color: var(--ink); font: 500 18px Georgia, serif; }.chart-heading p { max-width: 560px; color: #8d9993; font-size: 10px; line-height: 1.45; margin: 4px 0 0; }
+.chart-heading label { flex: 0 0 130px; display: grid; gap: 4px; }.chart-heading label span { color: #6f7d76; font-size: 7px; text-transform: uppercase; letter-spacing: .08em; }
+.chart-heading select { width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #101714; color: var(--ink); padding: 7px; font: 600 10px var(--font-geist-mono); }
+.range-matrix { display: grid; grid-template-columns: repeat(13, minmax(34px, 1fr)); gap: 3px; overflow-x: auto; padding-bottom: 4px; }
+.range-matrix > span { aspect-ratio: 1.2; min-width: 34px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.045); border-radius: 4px; background: #101714; color: #52605a; font: 600 8px var(--font-geist-mono); }
+.range-matrix > span.included { border-color: rgba(105,201,154,.45); background: rgba(105,201,154,.15); color: #a8e6c7; }
+.chart-legend { display: flex; gap: 16px; margin: 9px 0; color: #7b8881; font-size: 8px; }.chart-legend span { display: flex; align-items: center; gap: 5px; }.chart-legend i { width: 11px; height: 11px; border: 1px solid rgba(255,255,255,.07); border-radius: 3px; background: #101714; }.chart-legend i.included { border-color: rgba(105,201,154,.45); background: rgba(105,201,154,.15); }
+.range-notation { margin: 0 0 14px; color: #78857e; font-size: 9px; line-height: 1.45; }.range-notation strong { color: #c6d0ca; }
 .wide { width: 100%; padding: 11px; cursor: pointer; border-radius: 7px; }
 .empty { color: var(--muted); padding: 20px 0; }
 
@@ -224,4 +237,5 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
   .status-strip, .action-dock, .between-hands { width: 640px; }
   .raise-tools { grid-template-columns: auto 1fr 105px; }
   .review-panel { padding: 15px; }.review-cards, .equity-strip { grid-template-columns: 1fr; }.review-alternatives > div { grid-template-columns: 55px 48px 1fr; }
+  .chart-heading { align-items: stretch; flex-direction: column; }.chart-heading label { width: 150px; flex-basis: auto; }
 }

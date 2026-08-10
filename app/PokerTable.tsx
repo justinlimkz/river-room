@@ -10,6 +10,7 @@ import {
   humanSeat,
   isValidSavedState,
   migrateSavedState,
+  PREFLOP_CHARTS,
   legalBounds,
   potTotal,
   startHand,
@@ -25,6 +26,7 @@ const STORAGE_KEY = "riverroom-session-v8";
 const LEGACY_STORAGE_KEYS = ["riverroom-session-v7", "riverroom-session-v6", "riverroom-session-v5", "riverroom-session-v4"];
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
+const CHART_RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
 
 function PlayingCard({ card, hidden = false, small = false }: { card?: Card; hidden?: boolean; small?: boolean }) {
   if (hidden || !card) return <div className={`card card-back ${small ? "small" : ""}`} aria-label="Face-down card"><span>RR</span></div>;
@@ -170,6 +172,56 @@ function RulesPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
+function chartHand(row: number, column: number) {
+  if (row === column) return `${CHART_RANKS[row]}${CHART_RANKS[column]}`;
+  const highIndex = Math.min(row, column);
+  const lowIndex = Math.max(row, column);
+  return `${CHART_RANKS[highIndex]}${CHART_RANKS[lowIndex]}${row < column ? "s" : "o"}`;
+}
+
+function PreflopChartsPanel({ onClose }: { onClose: () => void }) {
+  const [chartIndex, setChartIndex] = useState(0);
+  const [optionIndex, setOptionIndex] = useState(0);
+  const chart = PREFLOP_CHARTS[chartIndex];
+  const option = chart.options[Math.min(optionIndex, chart.options.length - 1)];
+  const included = new Set(option.hands);
+  return (
+    <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="charts-title">
+      <div className="review-panel charts-panel">
+        <div className="review-header">
+          <div><span className="eyebrow">Decision coach reference</span><h2 id="charts-title">Preflop charts</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="Close preflop charts">×</button>
+        </div>
+        <p className="review-disclaimer">These are the coach’s baseline ranges, not automatic answers. Exact action order, position, price, effective stack and players still to act can change the recommendation.</p>
+        <div className="chart-tabs" role="tablist" aria-label="Preflop chart type">
+          {PREFLOP_CHARTS.map((candidate, index) => <button
+            key={candidate.id}
+            className={index === chartIndex ? "selected" : ""}
+            role="tab"
+            aria-selected={index === chartIndex}
+            onClick={() => { setChartIndex(index); setOptionIndex(0); }}
+          >{candidate.label}</button>)}
+        </div>
+        <div className="chart-heading">
+          <div><strong>{chart.label}</strong><p>{chart.description}</p></div>
+          <label><span>{chart.selectorLabel}</span><select value={optionIndex} onChange={(event) => setOptionIndex(Number(event.target.value))}>
+            {chart.options.map((candidate, index) => <option key={candidate.label} value={index}>{candidate.label}</option>)}
+          </select></label>
+        </div>
+        <div className="range-matrix" aria-label={`${chart.label}, ${option.label}`}>
+          {CHART_RANKS.flatMap((_, row) => CHART_RANKS.map((__, column) => {
+            const hand = chartHand(row, column);
+            return <span key={`${row}-${column}`} className={included.has(hand) ? "included" : ""} aria-label={`${hand}, ${included.has(hand) ? "included" : "not included"}`}>{hand}</span>;
+          }))}
+        </div>
+        <div className="chart-legend"><span><i className="included" />Included in baseline</span><span><i />Usually outside baseline</span></div>
+        <p className="range-notation"><strong>Range notation:</strong> “s” means suited, “o” means offsuit, and “+” includes every stronger hand in that family. Current shorthand: {option.specification}.</p>
+        <button className="primary wide" onClick={onClose}>Back to table</button>
+      </div>
+    </div>
+  );
+}
+
 const percent = (count: number, total: number) => total ? `${Math.round((count / total) * 100)}%` : "—";
 
 function ActionMix({
@@ -201,6 +253,7 @@ export default function PokerTable() {
   const [raiseTo, setRaiseTo] = useState<string | null>(null);
   const [reviewMode, setReviewMode] = useState<"current" | "history" | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [chartsOpen, setChartsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const act = (action: PokerAction) => {
     setRaiseTo(null);
@@ -247,6 +300,14 @@ export default function PokerTable() {
       const target = event.target as HTMLElement;
       if (target.tagName === "INPUT") return;
       const key = event.key.toLowerCase();
+      if (chartsOpen || rulesOpen) {
+        if (key === "escape") {
+          event.preventDefault();
+          setChartsOpen(false);
+          setRulesOpen(false);
+        }
+        return;
+      }
       if (reviewMode && key === "v") {
         event.preventDefault();
         setReviewMode(null);
@@ -278,7 +339,7 @@ export default function PokerTable() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [state, reviewMode, humanTurn, heroToCall, bounds.canRaise, bounds.min, bounds.max, effectiveRaiseTo]);
+  }, [state, reviewMode, rulesOpen, chartsOpen, humanTurn, heroToCall, bounds.canRaise, bounds.min, bounds.max, effectiveRaiseTo]);
 
   if (!state) return <main className="loading">Shuffling the deck…</main>;
 
@@ -304,6 +365,7 @@ export default function PokerTable() {
         <div className="brand"><span className="brand-mark">R</span><div><strong>River Room</strong><small>Hold’em trainer</small></div></div>
         <div className="table-meta"><span>{seatedPlayers === 6 ? "6-MAX" : `${seatedPlayers}-HANDED`} CASH</span><b>$1 / $2 NL</b><span>100 BB BUY-IN</span></div>
         <div className="header-actions">
+          <button onClick={() => setChartsOpen(true)}>Preflop charts</button>
           <button onClick={() => setRulesOpen(true)}>Table rules</button>
           <button onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>Hand log</button>
           <button onClick={reset}>Reset session</button>
@@ -413,6 +475,7 @@ export default function PokerTable() {
         onClose={() => setReviewMode(null)}
       />}
       {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
+      {chartsOpen && <PreflopChartsPanel onClose={() => setChartsOpen(false)} />}
     </main>
   );
 }

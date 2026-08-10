@@ -43,6 +43,9 @@ test("starter preview is fully removed", async () => {
   assert.match(table, /Poker terms used in the coach/);
   assert.match(table, /A 3-bet made after an initial raise and at least one call/);
   assert.match(table, /Pot odds \(price to call\)/);
+  assert.match(table, /Decision coach reference/);
+  assert.match(table, /Preflop charts/);
+  assert.match(table, /Range notation/);
   assert.match(layout, /River Room/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
 });
