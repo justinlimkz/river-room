@@ -35,6 +35,11 @@ test("starter preview is fully removed", async () => {
   assert.match(table, /No cap on raises/);
   assert.match(table, /reviewMode && key === "v"/);
   assert.match(table, /<kbd>V<\/kbd> Back to table/);
+  assert.match(table, /\["5", "7", "p", "a"\]/);
+  assert.match(table, /aria-keyshortcuts="5"/);
+  assert.match(table, /aria-keyshortcuts="7"/);
+  assert.match(table, /aria-keyshortcuts="P"/);
+  assert.match(table, /aria-keyshortcuts="A"/);
   assert.match(layout, /River Room/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
 });

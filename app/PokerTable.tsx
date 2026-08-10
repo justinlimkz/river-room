@@ -221,6 +221,15 @@ export default function PokerTable() {
         return;
       }
       if (humanTurn) {
+        if (bounds.canRaise && ["5", "7", "p", "a"].includes(key)) {
+          event.preventDefault();
+          const fraction = key === "5" ? 0.5 : key === "7" ? 0.75 : 1;
+          const preset = key === "a"
+            ? bounds.max
+            : Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + potTotal(state) * fraction)));
+          setRaiseTo(String(preset));
+          return;
+        }
         if (key === "f") act({ type: "fold" });
         if (key === "c") act(heroToCall ? { type: "call" } : { type: "check" });
         if (key === "r" && bounds.canRaise) act({ type: "raise", amount: effectiveRaiseTo });
@@ -237,7 +246,7 @@ export default function PokerTable() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [state, reviewMode, humanTurn, heroToCall, bounds.canRaise, effectiveRaiseTo]);
+  }, [state, reviewMode, humanTurn, heroToCall, bounds.canRaise, bounds.min, bounds.max, effectiveRaiseTo]);
 
   if (!state) return <main className="loading">Shuffling the deck…</main>;
 
@@ -300,8 +309,10 @@ export default function PokerTable() {
               </div>
               <div className="raise-tools">
                 <div className="quick-sizes">
-                  {[0.5, 0.75, 1].map((size) => <button key={size} disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(size)))}>{size === 1 ? "Pot" : `${size * 100}%`}</button>)}
-                  <button disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(bounds.max))}>All-in</button>
+                  <button aria-keyshortcuts="5" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(0.5)))} title="Set raise to 50% pot (5)"><kbd>5</kbd>50%</button>
+                  <button aria-keyshortcuts="7" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(0.75)))} title="Set raise to 75% pot (7)"><kbd>7</kbd>75%</button>
+                  <button aria-keyshortcuts="P" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(1)))} title="Set a pot-sized raise (P)"><kbd>P</kbd>Pot</button>
+                  <button aria-keyshortcuts="A" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(bounds.max))} title="Set raise to all-in (A)"><kbd>A</kbd>All-in</button>
                 </div>
                 <input aria-label="Raise amount" type="range" min={bounds.min} max={Math.max(bounds.min, bounds.max)} value={effectiveRaiseTo} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(event.target.value)} />
                 <label className="raise-input"><span>Raise to</span><b>$</b><input type="number" min={bounds.min} max={bounds.max} value={raiseInputValue} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(event.target.value)} onBlur={() => setRaiseTo(String(effectiveRaiseTo))} /></label>
