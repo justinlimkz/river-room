@@ -130,9 +130,16 @@ test("published preflop charts expose the coach's exact positional ranges", () =
   const bbDefense = PREFLOP_CHARTS.find((chart) => chart.id === "bb-defense")!;
   const bbThreeBet = PREFLOP_CHARTS.find((chart) => chart.id === "bb-three-bet")!;
   const sbFirstIn = PREFLOP_CHARTS.find((chart) => chart.id === "sb-mixed")!;
+  const versusThreeBet = PREFLOP_CHARTS.find((chart) => chart.id === "vs-three-bet")!;
   assert.ok(bbDefense.options.find((option) => option.label === "BTN")!.hands.length > bbDefense.options.find((option) => option.label === "UTG")!.hands.length);
   assert.ok(bbThreeBet.options.every((option) => option.hands.length < bbDefense.options.find((defense) => defense.label === option.label)!.hands.length));
   assert.ok(sbFirstIn.options.find((option) => option.label === "Limp or mix")!.hands.length > 0);
+  assert.equal(versusThreeBet.options.length, 15);
+  const buttonVsSmallBlind = versusThreeBet.options.find((option) => option.label === "BTN vs SB")!;
+  const buttonVsBigBlind = versusThreeBet.options.find((option) => option.label === "BTN vs BB")!;
+  assert.ok(buttonVsBigBlind.hands.length > buttonVsSmallBlind.hands.length);
+  assert.equal(buttonVsBigBlind.hands.includes("A8s"), true);
+  assert.equal(buttonVsBigBlind.hands.includes("K8s"), false);
 });
 
 test("all 2,598,960 five-card combinations match canonical category counts", () => {
@@ -861,6 +868,23 @@ test("AQo continues more often in a BTN-versus-BB three-bet pot than in an early
   assert.match(blindBattle.scenario, /BTN opener facing a BB three-bet/);
   assert.ok(blindBattle.frequencies.call > squeeze.frequencies.call + 0.4);
   assert.ok(blindBattle.frequencies.fold < squeeze.frequencies.fold - 0.45);
+});
+
+test("the Continue vs 3-bet chart and coach agree that BTN K8s folds to a BB three-bet", () => {
+  const spot = aqoFacingThreeBetSpot({ squeeze: false, lateVsBlind: true });
+  spot.players[humanSeat].hole = [card("K", "clubs"), card("8", "clubs")];
+  const plan = analyzePreflopSpot(spot, humanSeat)!;
+  const chart = PREFLOP_CHARTS.find((candidate) => candidate.id === "vs-three-bet")!;
+  const matchup = chart.options.find((option) => option.label === "BTN vs BB")!;
+  assert.equal(matchup.hands.includes("K8s"), false);
+  assert.equal(plan.preferred, "fold");
+  assert.equal(plan.frequencies.call, 0);
+
+  spot.players[humanSeat].hole = [card("A", "clubs"), card("8", "clubs")];
+  const continuingPlan = analyzePreflopSpot(spot, humanSeat)!;
+  assert.equal(matchup.hands.includes("A8s"), true);
+  assert.equal(continuingPlan.preferred, "call");
+  assert.match(continuingPlan.reason, /BTN vs BB continuing range/);
 });
 
 test("ordinary three-bets and squeezes produce distinct AQo recommendations", () => {

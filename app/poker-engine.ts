@@ -912,6 +912,25 @@ const BB_THREE_BET_SPECS: Partial<Record<Position, string>> = {
 };
 const BB_DEFENSE_RANGES = Object.fromEntries(Object.entries(BB_DEFENSE_SPECS).map(([position, specification]) => [position, expandRange(specification!)])) as Partial<Record<Position, Set<string>>>;
 const BB_THREE_BET_RANGES = Object.fromEntries(Object.entries(BB_THREE_BET_SPECS).map(([position, specification]) => [position, expandRange(specification!)])) as Partial<Record<Position, Set<string>>>;
+const VS_THREE_BET_SPECS: Record<string, string> = {
+  "UTG vs HJ": "TT+ AQs+ AKo KQs A5s",
+  "UTG vs CO": "TT+ AQs+ AKo KQs A5s",
+  "UTG vs BTN": "99+ AQs+ AQo+ KQs A5s A4s",
+  "UTG vs SB": "99+ AJs+ AQo+ KQs A5s A4s",
+  "UTG vs BB": "99+ AJs+ AQo+ KQs A5s A4s",
+  "HJ vs CO": "99+ AQs+ AKo KQs A5s",
+  "HJ vs BTN": "88+ AJs+ AQo+ KQs QJs A5s A4s",
+  "HJ vs SB": "88+ AJs+ AQo+ KQs QJs A5s A4s",
+  "HJ vs BB": "88+ AJs+ AQo+ KQs QJs A5s A4s",
+  "CO vs BTN": "77+ ATs+ AQo+ KQs KJs QJs JTs A5s A4s",
+  "CO vs SB": "66+ ATs+ AJo+ KQs KJs QJs JTs T9s A5s A4s",
+  "CO vs BB": "66+ ATs+ AJo+ KQs KJs QJs JTs T9s A5s A4s",
+  "BTN vs SB": "55+ A9s+ AJo+ KTs+ KQo QTs+ JTs T9s 98s A5s A4s",
+  "BTN vs BB": "44+ A8s+ ATo+ KTs+ KQo QTs+ JTs T9s 98s 87s A5s A4s",
+  "SB vs BB": "55+ A9s+ AJo+ KTs+ KQo QTs+ JTs T9s A5s A4s",
+};
+const VS_THREE_BET_RANGES = Object.fromEntries(Object.entries(VS_THREE_BET_SPECS)
+  .map(([scenario, specification]) => [scenario, expandRange(specification)])) as Record<string, Set<string>>;
 const SB_LIMP_SPEC = "22+ A2s+ K2s+ Q4s+ J6s+ T6s+ 95s+ 85s+ 74s+ 64s+ 54s A2o+ K7o+ Q8o+ J8o+ T8o+ 98o";
 const SB_LIMP_RANGE = expandRange(SB_LIMP_SPEC);
 const BB_VS_SB_CONTINUE_RANGE = expandRange("22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s");
@@ -978,6 +997,17 @@ export const PREFLOP_CHARTS: PreflopChartDefinition[] = [
     description: "Value and selected bluffing hands used to make the first preflop re-raise against an opener from this position.",
     selectorLabel: "Raiser's position",
     options: chartOptions(DEEP_THREE_BET_SPECS, SIX_MAX_CHART_POSITIONS),
+  },
+  {
+    id: "vs-three-bet",
+    label: "Continue vs 3-bet",
+    description: "Hands that continue after you open and a player behind re-raises. Select both your opening position and the three-bettor; calls and four-bets are shown together.",
+    selectorLabel: "Position matchup",
+    options: Object.entries(VS_THREE_BET_SPECS).map(([label, specification]) => ({
+      label,
+      specification,
+      hands: [...VS_THREE_BET_RANGES[label]],
+    })),
   },
   {
     id: "bb-vs-sb",
@@ -1084,6 +1114,15 @@ function facingThreeBetPlan(
   if (hand === "A5s" || hand === "A4s") {
     const raise = squeezed ? 0.08 : lateVsBlind ? 0.18 : 0.12;
     return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is principally a low-frequency blocker four-bet, not a routine call.`, { raise, fold: 1 - raise });
+  }
+  const chartScenario = `${player.position} vs ${aggressorPosition}`;
+  if (!squeezed && VS_THREE_BET_RANGES[chartScenario]?.has(hand)) {
+    const pair = hand.length === 2;
+    const fourBet = pair ? 0.12 : hand.startsWith("A") ? 0.16 : 0.08;
+    const call = inPosition ? (veryDeep ? 0.48 : 0.56) : (veryDeep ? 0.3 : 0.4);
+    return preflopPlan(hand, effectiveStackBb, scenario,
+      `${hand} is inside the ${chartScenario} continuing range. Prefer calling hands that realize equity well and reserve the smaller four-bet frequency for value and credible blockers.`,
+      { call, raise: fourBet, fold: 1 - call - fourBet });
   }
   const pairOrSuited = hand.length === 2 || hand.endsWith("s");
   const speculativeCall = pairOrSuited && inPosition && !squeezed && price <= 0.27 ? (veryDeep ? 0.22 : 0.14) : 0;
