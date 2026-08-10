@@ -40,6 +40,9 @@ test("starter preview is fully removed", async () => {
   assert.match(table, /aria-keyshortcuts="7"/);
   assert.match(table, /aria-keyshortcuts="P"/);
   assert.match(table, /aria-keyshortcuts="A"/);
+  assert.match(table, /Poker terms used in the coach/);
+  assert.match(table, /A 3-bet made after an initial raise and at least one call/);
+  assert.match(table, /Pot odds \(price to call\)/);
   assert.match(layout, /River Room/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
 });

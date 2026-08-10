@@ -71,8 +71,25 @@ function SeatView({ player, index, state }: { player: Seat; index: number; state
   );
 }
 
+function clarifyLegacyReview(item: ReviewItem): ReviewItem {
+  const match = item.concept.match(/^(\S+) cold caller facing a (\S+) squeeze$/);
+  const hadAlreadyCalled = item.actionLine.some((action) => action.startsWith("You called"));
+  if (!match || hadAlreadyCalled) return item;
+  const concept = `${match[1]} facing a ${match[2]} three-bet before entering the pot`;
+  const legacy = "Cold callers must defend tightly against a squeeze because both the squeezer and original raiser represent live ranges.";
+  const clearer = "You had not called the original raise, so you were not a cold caller. Continue very tightly because the three-bettor has shown strength and the original raiser can still act again.";
+  return {
+    ...item,
+    concept,
+    note: item.note.replace(legacy, clearer),
+    basis: item.basis?.replace(item.concept, concept),
+    alternatives: item.alternatives.map((alternative) => ({ ...alternative, reason: alternative.reason.replace(legacy, clearer) })),
+  };
+}
+
 function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: string; onClose: () => void }) {
-  const focus = items.find((item) => item.grade === "Costly") ?? items.find((item) => item.grade === "Viable") ?? items[0];
+  const displayedItems = items.map(clarifyLegacyReview);
+  const focus = displayedItems.find((item) => item.grade === "Costly") ?? displayedItems.find((item) => item.grade === "Viable") ?? displayedItems[0];
   return (
     <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="review-title">
       <div className="review-panel">
@@ -80,11 +97,26 @@ function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: st
           <div><span className="eyebrow">Decision coach</span><h2 id="review-title">{title}</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="Close review">×</button>
         </div>
-        <p className="review-disclaimer">Advice uses only information available when you acted. Close spots are labeled as such; estimates are not solver-grade GTO solutions.</p>
+        <p className="review-disclaimer">Advice uses only information available when you acted. Close spots are labeled as such; estimates are approximate rather than solver-grade GTO solutions.</p>
+        <details className="coach-glossary">
+          <summary>Poker terms used in the coach</summary>
+          <div>
+            <p><strong>Range</strong><span>The set of hands a player could plausibly hold.</span></p>
+            <p><strong>Equity</strong><span>Your estimated share of the pot if the hand were played to showdown many times.</span></p>
+            <p><strong>Pot odds</strong><span>The percentage of the final calling pot that your call would contribute.</span></p>
+            <p><strong>Effective stack</strong><span>The most you and the relevant opponent can win from one another.</span></p>
+            <p><strong>SPR</strong><span>Stack-to-pot ratio: the effective stack divided by the pot at the start of a postflop street.</span></p>
+            <p><strong>3-bet / 4-bet</strong><span>The first preflop re-raise / the next re-raise.</span></p>
+            <p><strong>Squeeze</strong><span>A 3-bet made after an initial raise and at least one call.</span></p>
+            <p><strong>Cold call</strong><span>Calling a raise without having voluntarily invested earlier in that betting round.</span></p>
+            <p><strong>Blocker</strong><span>A card you hold that makes certain strong opponent hands less likely.</span></p>
+            <p><strong>Semi-bluff</strong><span>A bet that can win immediately but also has a meaningful draw when called.</span></p>
+          </div>
+        </details>
         {focus && <section className="review-focus"><span>Best lesson to keep</span><strong>{focus.concept}</strong><p>{focus.takeaway}</p></section>}
-        {items.length === 0 ? <p className="empty">You didn’t face a decision in this hand.</p> : (
+        {displayedItems.length === 0 ? <p className="empty">You didn’t face a decision in this hand.</p> : (
           <div className="review-list">
-            {items.map((item) => (
+            {displayedItems.map((item) => (
               <article className="review-item" key={item.id}>
                 <div className="review-item-top"><span>Hand #{item.handNumber} · {item.street} · {item.position}</span><b className={`grade ${item.grade.toLowerCase()}`}>{item.grade}</b></div>
                 <div className="review-cards">
@@ -97,7 +129,7 @@ function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: st
                   <div><small>Pot · to call</small><strong>${item.pot} · ${item.toCall}</strong></div>
                   <div><small>Effective stack · SPR</small><strong>${item.effectiveStack} · {item.spr}</strong></div>
                 </div>
-                {item.equity !== undefined && <div className="equity-strip"><span><small>{item.equityLabel}</small><strong>{Math.round((item.equityLow ?? item.equity) * 100)}–{Math.round((item.equityHigh ?? item.equity) * 100)}%</strong></span><span><small>Immediate calling price</small><strong>{Math.round(item.potOdds * 100)}%</strong></span></div>}
+                {item.equity !== undefined && <div className="equity-strip"><span><small>Estimated equity vs likely hands</small><strong>{Math.round((item.equityLow ?? item.equity) * 100)}–{Math.round((item.equityHigh ?? item.equity) * 100)}%</strong></span><span><small>Pot odds (price to call)</small><strong>{Math.round(item.potOdds * 100)}%</strong></span></div>}
                 <p className="review-verdict"><strong>Recommended baseline: {item.suggestion}.</strong> {item.note}</p>
                 {item.recommendedSize && <p className="size-guidance">Sizing guide: target ${item.recommendedSize.target}; approximately ${item.recommendedSize.min}–${item.recommendedSize.max} remains reasonable.</p>}
                 <div className="review-alternatives" aria-label="Action comparison">

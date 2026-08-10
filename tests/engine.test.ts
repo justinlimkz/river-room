@@ -687,12 +687,12 @@ function kkFacingFourBetSpot() {
   return state;
 }
 
-test("KK facing a four-bet at 100 BB is a premium stack-off, never a fold", () => {
+test("KK facing a four-bet at 100 BB plays for all the chips, never folds", () => {
   const spot = kkFacingFourBetSpot();
   const plan = analyzePreflopSpot(spot, humanSeat);
   assert.equal(plan?.preferred, "all-in");
   assert.equal(plan?.confidence, "High");
-  assert.match(plan?.reason ?? "", /premium stack-off/);
+  assert.match(plan?.reason ?? "", /play for all the chips/);
 
   const folded = applyAction(spot, humanSeat, { type: "fold" });
   assert.equal(folded.reviews[0].suggestion, "Move all-in");
@@ -769,6 +769,41 @@ test("ordinary three-bets and squeezes produce distinct AQo recommendations", ()
   assert.ok(squeeze.frequencies.call < ordinary.frequencies.call);
 });
 
+test("a three-bet after a limp and isolation raise is not mislabeled as a squeeze or cold call", () => {
+  const state = createSession(seededRandom(915));
+  const limper = 0;
+  const opener = 1;
+  const threeBettor = 2;
+  state.players[humanSeat].position = "BB";
+  state.players[humanSeat].hole = [card("A", "spades"), card("7", "spades")];
+  state.players[humanSeat].streetBet = 2;
+  state.players[humanSeat].committed = 2;
+  state.players[humanSeat].stack = 198;
+  state.players[limper].position = "UTG";
+  state.players[opener].position = "HJ";
+  state.players[threeBettor].position = "BTN";
+  state.players[limper].streetBet = 2;
+  state.players[opener].streetBet = 8;
+  state.players[threeBettor].streetBet = 32;
+  state.currentActor = humanSeat;
+  state.currentBet = 32;
+  state.minRaise = 24;
+  state.raiseCount = 2;
+  state.preflopRaises = 2;
+  state.preflopOpener = opener;
+  state.preflopAggressor = threeBettor;
+  state.actionLog = [
+    { street: "preflop", seat: limper, type: "call", amount: 2, toCallBefore: 2, raiseLevel: 0 },
+    { street: "preflop", seat: opener, type: "raise", amount: 8, toCallBefore: 2, raiseLevel: 0 },
+    { street: "preflop", seat: threeBettor, type: "raise", amount: 32, toCallBefore: 8, raiseLevel: 1 },
+  ];
+  const plan = analyzePreflopSpot(state, humanSeat)!;
+  assert.equal(plan.preferred, "fold");
+  assert.equal(plan.scenario, "BB facing a BTN three-bet after a HJ isolation raise");
+  assert.doesNotMatch(plan.scenario, /squeeze|cold caller/);
+  assert.match(plan.reason, /not a squeeze because nobody called the raise first/);
+});
+
 function postflopCoachingSpot() {
   const state = createSession(seededRandom(907));
   const opponent = 0;
@@ -804,7 +839,7 @@ test("postflop coaching is deterministic and never uses an opponent's hidden car
   assert.equal(firstReview.equity, secondReview.equity);
   assert.equal(firstReview.grade, secondReview.grade);
   assert.ok((firstReview.equityHigh ?? 0) > (firstReview.equityLow ?? 1));
-  assert.match(firstReview.basis!, /deterministic/);
+  assert.match(firstReview.basis!, /repeatable simulated deals/);
 });
 
 test("an unjustified deep-stack postflop all-in is never allowed to look reasonable", () => {

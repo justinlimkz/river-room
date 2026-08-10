@@ -885,11 +885,11 @@ function facingThreeBetPlan(
   }
   if (hand === "AKo" || hand === "JJ") {
     const fold = early && squeezed ? 0.2 : 0.1;
-    return preflopPlan(hand, effectiveStackBb, scenario, `${hand} should usually continue, but position, depth, and the stronger range implied by a squeeze keep this from being an automatic stack-off.`, { call: inPosition ? 0.56 : 0.44, raise: 1 - fold - (inPosition ? 0.56 : 0.44), fold });
+    return preflopPlan(hand, effectiveStackBb, scenario, `${hand} should usually continue, but position, depth, and the stronger range implied by a squeeze mean it is not always strong enough to play for all the chips.`, { call: inPosition ? 0.56 : 0.44, raise: 1 - fold - (inPosition ? 0.56 : 0.44), fold });
   }
   if (hand === "AQo") {
     if (early && squeezed) {
-      return preflopPlan(hand, effectiveStackBb, scenario, `AQo is often dominated by a squeeze range and realizes equity poorly out of position. The caller adds dead money but also leaves another live range behind; fold most often and use only a small blocker four-bet mix.`, { fold: 0.87, raise: 0.1, call: 0.03 }, "Medium");
+      return preflopPlan(hand, effectiveStackBb, scenario, `AQo is often dominated by the squeezer's likely hands and is difficult to play profitably out of position. The caller's chips improve the pot, but that player may also continue; fold most often and use only a small blocker four-bet mix.`, { fold: 0.87, raise: 0.1, call: 0.03 }, "Medium");
     }
     if (lateVsBlind && !squeezed) {
       return preflopPlan(hand, effectiveStackBb, scenario, `AQo is much stronger in a late-position versus blind battle because the blind's three-bet range is wider. Continue mostly by calling, with a smaller four-bet mix.`, { call: veryDeep ? 0.5 : 0.46, raise: 0.2, fold: veryDeep ? 0.3 : 0.34 }, "Medium");
@@ -899,7 +899,7 @@ function facingThreeBetPlan(
   if (hand === "AQs" || hand === "KQs" || hand === "TT" || hand === "99") {
     const call = inPosition ? (veryDeep ? 0.58 : 0.52) : (veryDeep ? 0.28 : 0.38);
     const raise = hand === "AQs" ? 0.18 : 0.08;
-    return preflopPlan(hand, effectiveStackBb, scenario, `This hand can realize equity as a call, especially in position, but should fold more often when deep and out of position${squeezed ? " against the tighter squeeze range" : ""}.`, { call, raise, fold: 1 - call - raise });
+    return preflopPlan(hand, effectiveStackBb, scenario, `Calling can let this hand reach showdown profitably, especially in position, but it should fold more often when deep and out of position${squeezed ? " against the tighter squeeze range" : ""}.`, { call, raise, fold: 1 - call - raise });
   }
   if (hand === "A5s" || hand === "A4s") {
     const raise = squeezed ? 0.08 : lateVsBlind ? 0.18 : 0.12;
@@ -943,18 +943,34 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
     }
     const opener = aggressiveActions[0]?.seat ?? context.opener;
     const openerPosition = opener === null || opener === undefined ? "UTG" : state.players[opener].position;
+    const firstRaiseIndex = aggressiveActions.length >= 1 ? preflopActions.indexOf(aggressiveActions[0]) : -1;
     const secondRaiseIndex = aggressiveActions.length >= 2 ? preflopActions.indexOf(aggressiveActions[1]) : -1;
-    const callersBeforeThreeBet = secondRaiseIndex < 0 ? [] : preflopActions.slice(0, secondRaiseIndex)
-      .filter((action) => action.type === "call" && action.raiseLevel >= 1 && action.seat !== seatIndex && !state.players[action.seat].folded);
-    const squeezed = aggressiveActions.length === 2 && callersBeforeThreeBet.length > 0;
+    const callersBetweenRaises = secondRaiseIndex < 0 ? [] : preflopActions.slice(firstRaiseIndex + 1, secondRaiseIndex)
+      .filter((action) => action.type === "call" && action.raiseLevel >= 1);
+    const callersBeforeThreeBet = callersBetweenRaises.filter((action) => action.seat !== seatIndex);
+    const heroCalledOriginalRaise = callersBetweenRaises.some((action) => action.seat === seatIndex);
+    const squeezed = aggressiveActions.length === 2 && callersBetweenRaises.length > 0;
     if (state.raiseCount === 2 && opener === seatIndex && lastRaiser !== null) {
       return facingThreeBetPlan(state, seatIndex, hand, effectiveStackBb, lastRaiser, squeezed, callersBeforeThreeBet.length);
     }
     if (state.raiseCount === 2 && lastRaiser !== null) {
-      const scenario = `${player.position} cold caller facing a ${state.players[lastRaiser].position} squeeze`;
-      if (DEEP_FOUR_BET_RANGE.has(hand)) return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is strong enough to continue against the squeeze; prefer a value four-bet while retaining some calls.`, { raise: 0.62, call: 0.28, fold: 0.1 }, "High");
-      if (hand === "JJ" || hand === "TT" || hand === "AQs" || hand === "AKo") return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is near the top of the cold-calling range, but the squeeze and original raiser still constrain the defense.`, { call: 0.42, fold: 0.48, raise: 0.1 });
-      return preflopPlan(hand, effectiveStackBb, scenario, `Cold callers must defend tightly against a squeeze because both the squeezer and original raiser represent live ranges.`, { fold: 0.92, call: 0.08 });
+      const aggressorPosition = state.players[lastRaiser].position;
+      const limpersBeforeOpen = firstRaiseIndex < 0 ? [] : preflopActions.slice(0, firstRaiseIndex)
+        .filter((action) => action.type === "call" && action.raiseLevel === 0);
+      const raisedPotDescription = limpersBeforeOpen.length > 0 ? `${openerPosition} isolation raise` : `${openerPosition} raise`;
+      const scenario = heroCalledOriginalRaise
+        ? `${player.position} caller facing a ${aggressorPosition} squeeze`
+        : squeezed
+          ? `${player.position} facing a ${aggressorPosition} squeeze before entering the pot`
+          : `${player.position} facing a ${aggressorPosition} three-bet after a ${raisedPotDescription}`;
+      const pressureExplanation = heroCalledOriginalRaise
+        ? `You called the original raise, then ${aggressorPosition} squeezed: a three-bet after a raise and at least one call. The original raiser can still act again.`
+        : squeezed
+          ? `${aggressorPosition} squeezed after a raise and call. You have not entered voluntarily, and both the three-bettor and original raiser can hold strong hands.`
+          : `${aggressorPosition} three-bet the ${raisedPotDescription}. This is not a squeeze because nobody called the raise first; the original raiser can still act again.`;
+      if (DEEP_FOUR_BET_RANGE.has(hand)) return preflopPlan(hand, effectiveStackBb, scenario, `${pressureExplanation} ${hand} is strong enough to continue, usually by making a value four-bet while retaining some calls.`, { raise: 0.62, call: 0.28, fold: 0.1 }, "High");
+      if (hand === "JJ" || hand === "TT" || hand === "AQs" || hand === "AKo") return preflopPlan(hand, effectiveStackBb, scenario, `${pressureExplanation} ${hand} is near the top of the continuing range, but the two potentially strong ranges still require a tight defense.`, { call: 0.42, fold: 0.48, raise: 0.1 });
+      return preflopPlan(hand, effectiveStackBb, scenario, `${pressureExplanation} Continue only with a very strong range; ${hand} should usually fold.`, { fold: 0.92, call: 0.08 });
     }
     if (state.raiseCount === 1 && player.position === "BB" && (openerPosition === "SB" || openerPosition === "BTN/SB")) {
       if (BB_VS_SB_THREE_BET_RANGE.has(hand)) {
@@ -972,12 +988,12 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
     if (state.raiseCount === 1 && DEEP_CONTINUE_RANGES[openerPosition].has(hand)) {
       const inPosition = lastRaiser !== null && actsAfterPostflop(state, seatIndex, lastRaiser);
       const call = inPosition ? 0.68 : 0.54;
-      return preflopPlan(hand, effectiveStackBb, `${player.position} facing a ${openerPosition} open`, `${hand} can continue against this ${openerPosition} opening range and price${inPosition ? " with position" : ", though being out of position lowers its realization"}.`, { call, fold: 1 - call });
+      return preflopPlan(hand, effectiveStackBb, `${player.position} facing a ${openerPosition} open`, `${hand} can continue against this ${openerPosition} opening range and price${inPosition ? " with position" : ", though being out of position makes it harder to reach showdown profitably"}.`, { call, fold: 1 - call });
     }
     if (state.raiseCount >= 3 && DEEP_PREMIUM_STACK_OFF_RANGE.has(hand)) {
       const preferred = state.raiseCount === 3 && effectiveStackBb <= 150 ? "all-in" : "call";
       return preflopPlan(hand, effectiveStackBb, `Facing a four-bet at ${effectiveStackBb} BB`, preferred === "all-in"
-        ? `${hand} is a premium stack-off hand against a four-bet at ${effectiveStackBb} BB effective.`
+        ? `${hand} is a premium hand that is strong enough to play for all the chips against a four-bet at ${effectiveStackBb} BB effective.`
         : `${hand} must continue against this re-raise; at this depth, calling preserves a wider continuing range.`, preferred === "all-in" ? { "all-in": 0.78, call: 0.22 } : { call: 0.62, raise: 0.38 }, "High");
     }
     if (state.raiseCount === 3 && DEEP_FOUR_BET_CONTINUE_RANGE.has(hand) && effectiveStackBb <= 120 && toCallFor(state, seatIndex) <= player.stack * 0.28) {
@@ -1837,8 +1853,8 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
         const verdict: ReviewItem["grade"] = choice === preferred ? "Preferred" : frequency >= 0.1 ? "Viable" : "Costly";
         const actionReason = choice === preferred
           ? preflopPlan.reason
-          : choice === "raise" || choice === "all-in" ? "Use aggression only when the range and blockers support the extra chips at risk."
-            : choice === "call" ? "Calling depends on price, equity realization, position, and whether another player can act behind."
+          : choice === "raise" || choice === "all-in" ? "Re-raise only when your hand strength and blocker effects justify the extra chips at risk."
+            : choice === "call" ? "Calling depends on the pot odds, position, future betting, and whether another player can raise behind you."
               : "Folding avoids a difficult or dominated continuation but gives up the hand's remaining equity.";
         return {
           action: value === "all-in" ? "All-in" : value[0].toUpperCase() + value.slice(1),
@@ -1886,7 +1902,7 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const suggestion = preferred === "raise" ? `${state.currentBet > 0 ? "Raise" : "Bet"}${recommendedSize ? ` to about $${recommendedSize.target}` : ""}`
     : preferred === "call" ? "Call" : preferred === "fold" ? "Fold" : "Check";
   const concept = state.street === "river" && toCall > 0 ? "River bluff-catching"
-    : context.opponents.length > 1 ? "Multiway equity realization"
+    : context.opponents.length > 1 ? "Playing against multiple opponents"
       : draw ? "Draws and semi-bluffing"
         : toCall > 0 ? "Pot odds and ranges" : strong ? "Value betting" : "Checking and pot control";
   const legalActions: ActionKind[] = toCall > 0 ? ["fold", "call", ...(bounds.canRaise ? ["raise" as const] : [])] : ["check", ...(bounds.canRaise ? ["raise" as const] : [])];
@@ -1894,7 +1910,7 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
     let verdict: ReviewItem["grade"] = candidate === preferred ? "Preferred" : "Viable";
     if ((weak && (candidate === "call" || candidate === "raise")) || (strong && candidate === "fold")) verdict = "Costly";
     const reason = candidate === "fold" ? (weak ? "Avoids investing when even the optimistic equity estimate misses the price." : "Surrenders meaningful showdown equity.")
-      : candidate === "call" ? (weak ? "The modeled range does not supply enough equity at this price." : "Realizes equity without inflating the pot, though future streets still matter.")
+      : candidate === "call" ? (weak ? "The modeled range does not supply enough equity at this price." : "Keeps the pot smaller while using the hand's chance to win, though future streets still matter.")
         : candidate === "check" ? (strong ? "Controls the pot but may miss value or allow a free card." : "Preserves the stack and keeps weaker hands in.")
           : strong ? "Builds value against worse continuing hands; use a disciplined size." : draw ? "Can combine fold equity with live drawing equity, but is range-sensitive." : "Requires enough folds to compensate for limited showdown equity.";
     return { action: candidate === "raise" ? (state.currentBet > 0 ? "Raise" : "Bet") : candidate[0].toUpperCase() + candidate.slice(1), verdict, reason };
@@ -1919,7 +1935,7 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
         ? `Your hand appears well ahead of the modeled continuing ranges, but the recommended size still matters.`
         : `This is a close, range-sensitive spot. You are ${context.inPosition ? "in position" : "out of position"} in a ${context.potType} pot, so raw equity alone does not settle the decision.`,
     confidence: weak || strong ? "Medium" : "Low",
-    basis: `${iterations} deterministic range-weighted trials · uncertainty includes sampling and range-model allowance`,
+    basis: `${iterations} repeatable simulated deals weighted toward opponents' likely hands · the displayed range includes model uncertainty`,
   };
 }
 
