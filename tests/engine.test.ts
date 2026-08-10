@@ -9,10 +9,12 @@ import {
   createSession,
   decideBot,
   decideBotCandidate,
+  decideBotV8,
   decideBotLegacy,
   decideBotV6,
   estimateRangeEquity,
   estimateRangeEquityV6,
+  evaluatePostflopActions,
   evaluateHand,
   humanSeat,
   legalBounds,
@@ -76,6 +78,12 @@ test("published preflop charts expose the coach's exact positional ranges", () =
   assert.equal(button.hands.includes("A7o"), true);
   assert.equal(utg.hands.includes("A7o"), false);
   assert.equal(PREFLOP_CHARTS.find((chart) => chart.id === "bb-vs-sb")!.options.find((option) => option.label === "Continue")!.hands.includes("K7o"), true);
+  const bbDefense = PREFLOP_CHARTS.find((chart) => chart.id === "bb-defense")!;
+  const bbThreeBet = PREFLOP_CHARTS.find((chart) => chart.id === "bb-three-bet")!;
+  const sbFirstIn = PREFLOP_CHARTS.find((chart) => chart.id === "sb-mixed")!;
+  assert.ok(bbDefense.options.find((option) => option.label === "BTN")!.hands.length > bbDefense.options.find((option) => option.label === "UTG")!.hands.length);
+  assert.ok(bbThreeBet.options.every((option) => option.hands.length < bbDefense.options.find((defense) => defense.label === option.label)!.hands.length));
+  assert.ok(sbFirstIn.options.find((option) => option.label === "Limp or mix")!.hands.length > 0);
 });
 
 test("all 2,598,960 five-card combinations match canonical category counts", () => {
@@ -885,7 +893,19 @@ test("postflop coaching is deterministic and never uses an opponent's hidden car
   assert.equal(firstReview.equity, secondReview.equity);
   assert.equal(firstReview.grade, secondReview.grade);
   assert.ok((firstReview.equityHigh ?? 0) > (firstReview.equityLow ?? 1));
-  assert.match(firstReview.basis!, /repeatable simulated deals/);
+  assert.match(firstReview.basis!, /repeatable range-weighted rollouts/);
+});
+
+test("postflop action EV is deterministic, legal, and hidden-card invariant", () => {
+  const first = postflopCoachingSpot();
+  const second = postflopCoachingSpot();
+  second.players[0].hole = [card("2", "diamonds"), card("3", "diamonds")];
+  const firstEvaluations = evaluatePostflopActions(first, humanSeat, 32, seededRandom(1201));
+  const secondEvaluations = evaluatePostflopActions(second, humanSeat, 32, seededRandom(1201));
+  assert.deepEqual(firstEvaluations, secondEvaluations);
+  assert.ok(firstEvaluations.length >= 3);
+  firstEvaluations.forEach((evaluation) => assert.equal(validateAction(first, humanSeat, evaluation.action).legal, true));
+  assert.ok(firstEvaluations.every((evaluation) => evaluation.evLow <= evaluation.ev && evaluation.ev <= evaluation.evHigh));
 });
 
 test("river coaching does not confuse equity versus all hands with value versus a calling range", () => {
@@ -917,7 +937,7 @@ test("river coaching does not confuse equity versus all hands with value versus 
   assert.equal(review.grade, "Preferred");
   assert.equal(review.suggestion, "Check");
   assert.equal(review.concept, "Thin river value");
-  assert.match(review.note, /missed draws that usually fold/);
+  assert.match(review.note, /missed draws.*usually fold/);
   assert.match(review.takeaway, /calling range/);
 });
 
@@ -939,9 +959,26 @@ test("completed-hand decisions move into the capped learning archive", () => {
   assert.equal(next.reviews.length, 0);
   assert.equal(next.reviewArchive.length, 1);
   assert.equal(next.reviewArchive[0].handNumber, state.handNumber);
+  assert.equal(next.trainingDecisions.length, 1);
+  assert.equal(Object.values(next.trainingSummary).reduce((sum, leak) => sum + leak.opportunities, 0), 1);
 });
 
-test("deep-stack live bots exactly match the promoted candidate and stay legal", () => {
+test("v8 sessions migrate to the training schema without losing progress", () => {
+  const state = createSession(seededRandom(1202));
+  state.players[humanSeat].stack = 448;
+  const legacy = structuredClone(state) as unknown as Record<string, unknown> & { version: number };
+  legacy.version = 8;
+  delete legacy.trainingDecisions;
+  delete legacy.trainingSummary;
+  const migrated = migrateSavedState(legacy);
+  assert.ok(migrated);
+  assert.equal(migrated.version, 9);
+  assert.equal(migrated.players[humanSeat].stack, 448);
+  assert.deepEqual(migrated.trainingDecisions, []);
+  assert.equal(Object.values(migrated.trainingSummary).every((leak) => leak.opportunities === 0), true);
+});
+
+test("deep-stack live bots remain legal relative to the frozen V8 policy", () => {
   const random = seededRandom(903);
   for (let run = 0; run < 300; run += 1) {
     const state = aqoFacingThreeBetSpot({ squeeze: run % 2 === 0 });
@@ -949,9 +986,9 @@ test("deep-stack live bots exactly match the promoted candidate and stay legal",
     state.players[actor].hole = shuffledDeck(random).slice(0, 2);
     const seed = 20_000 + run;
     const current = decideBot(state, actor, seededRandom(seed));
-    const candidate = decideBotCandidate(state, actor, seededRandom(seed));
+    const predecessor = decideBotV8(state, actor, seededRandom(seed));
     assert.equal(validateAction(state, actor, current).legal, true);
-    assert.deepEqual(current, candidate);
+    assert.equal(validateAction(state, actor, predecessor).legal, true);
   }
 });
 
@@ -963,7 +1000,7 @@ test("legacy saves preserve bankroll and statistics while starting a clean upgra
   const legacy = { ...state, version: 4 };
   const migrated = migrateSavedState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated.version, 8);
+  assert.equal(migrated.version, 9);
   assert.equal(migrated.status, "handOver");
   assert.equal(migrated.players[5].stack, 180);
   assert.equal(migrated.players[5].stats.vpip, 12);
@@ -1005,7 +1042,7 @@ test("v5 saves gain empty counters without interrupting an active hand", () => {
   });
   const migrated = migrateSavedState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated.version, 8);
+  assert.equal(migrated.version, 9);
   assert.equal(migrated.status, "playing");
   assert.equal(migrated.currentActor, state.currentActor);
   assert.equal(migrated.players[5].stats.preflopFolds, 0);
@@ -1019,7 +1056,7 @@ test("v7 sessions migrate in place and begin tracking online rake", () => {
   delete legacy.sessionRake;
   const migrated = migrateSavedState(legacy);
   assert.ok(migrated);
-  assert.equal(migrated.version, 8);
+  assert.equal(migrated.version, 9);
   assert.equal(migrated.status, "playing");
   assert.equal(migrated.players[humanSeat].stack, 341);
   assert.equal(migrated.sessionRake, 0);
@@ -1028,6 +1065,7 @@ test("v7 sessions migrate in place and begin tracking online rake", () => {
 test("preflop bot populations have distinct realistic frequencies and escalation", () => {
   const random = seededRandom(20260807);
   let state = createSession(random);
+  state.players.forEach((player) => { player.isHuman = false; });
   const profiles = new Map<BotProfile, { hands: number; vpip: number; pfr: number; threeBetOpportunities: number; threeBets: number }>();
   const positions = new Map<Position, { opportunities: number; opens: number }>();
   const raisesPerHand: number[] = [];
@@ -1111,6 +1149,7 @@ test("preflop bot populations have distinct realistic frequencies and escalation
 test("postflop profiles separate calling, folding, and aggression without extremes", () => {
   const random = seededRandom(7701);
   let state = createSession(random);
+  state.players.forEach((player) => { player.isHuman = false; });
   const metrics = new Map<BotProfile, { actions: number; facing: number; folds: number; aggressive: number }>();
   for (let hand = 0; hand < 700; hand += 1) {
     if (hand > 0) {

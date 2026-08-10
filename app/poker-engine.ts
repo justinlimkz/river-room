@@ -8,6 +8,31 @@ export type BotProfile = "balanced" | "tag" | "lag" | "nit" | "caller";
 
 export type PokerAction = { type: ActionKind; amount?: number };
 export type ActionValidation = { legal: boolean; reason: string; target?: number };
+export type ActionEvaluation = {
+  action: PokerAction;
+  label: string;
+  ev: number;
+  evLow: number;
+  evHigh: number;
+  foldProbability?: number;
+  equityWhenCalled?: number;
+  raiseProbability?: number;
+};
+export type LeakKey = "bb-defense" | "preflop-aggression" | "three-bet-defense" | "missed-value" | "thin-value" | "bluff-selection" | "calling-price" | "bet-sizing";
+export type LeakStat = { opportunities: number; mistakes: number; totalRegret: number };
+export type TrainingDecision = {
+  id: string;
+  handNumber: number;
+  street: Street;
+  position: Position;
+  chosenAction: string;
+  recommendedAction: string;
+  concept: string;
+  leakKey: LeakKey;
+  estimatedRegret: number;
+  confidence: "High" | "Medium" | "Low";
+};
+export type TrainingSummary = Record<LeakKey, LeakStat>;
 export type PlayerStats = {
   hands: number;
   vpip: number;
@@ -80,15 +105,16 @@ export type ReviewItem = {
   suggestion: string;
   concept: string;
   takeaway: string;
-  alternatives: Array<{ action: string; verdict: "Preferred" | "Viable" | "Costly"; reason: string; frequency?: number }>;
+  alternatives: Array<{ action: string; verdict: "Preferred" | "Viable" | "Costly"; reason: string; frequency?: number; ev?: number; evLow?: number; evHigh?: number; foldProbability?: number; equityWhenCalled?: number }>;
   recommendedSize?: { target: number; min: number; max: number };
   note: string;
   confidence?: "High" | "Medium" | "Low";
   basis?: string;
+  estimatedRegret?: number;
 };
 
 export type HandState = {
-  version: 8;
+  version: 9;
   handNumber: number;
   dealer: number;
   street: Street;
@@ -108,6 +134,8 @@ export type HandState = {
   history: string[];
   reviews: ReviewItem[];
   reviewArchive: ReviewItem[];
+  trainingDecisions: TrainingDecision[];
+  trainingSummary: TrainingSummary;
   result: string;
   sessionStart: number;
   sessionHands: number;
@@ -164,6 +192,17 @@ const emptyStats = (): PlayerStats => ({
   handsWon: 0,
   showdowns: 0,
   showdownWins: 0,
+});
+
+const emptyTrainingSummary = (): TrainingSummary => ({
+  "bb-defense": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "preflop-aggression": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "three-bet-defense": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "missed-value": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "thin-value": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "bluff-selection": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "calling-price": { opportunities: 0, mistakes: 0, totalRegret: 0 },
+  "bet-sizing": { opportunities: 0, mistakes: 0, totalRegret: 0 },
 });
 
 export const humanSeat = 5;
@@ -272,7 +311,7 @@ function pay(player: Seat, amount: number) {
 
 export function createSession(random: () => number = cryptoRandom): HandState {
   return startHand({
-    version: 8,
+    version: 9,
     handNumber: 0,
     dealer: 4,
     street: "preflop",
@@ -292,6 +331,8 @@ export function createSession(random: () => number = cryptoRandom): HandState {
     history: [],
     reviews: [],
     reviewArchive: [],
+    trainingDecisions: [],
+    trainingSummary: emptyTrainingSummary(),
     result: "",
     sessionStart: 200,
     sessionHands: 0,
@@ -527,7 +568,11 @@ export function applyAction(input: HandState, seatIndex: number, action: PokerAc
   });
 
   append(state, `${player.name} · ${player.lastAction}`);
-  if (seatIndex === humanSeat) state.reviews.push(buildReview(input, action));
+  if (seatIndex === humanSeat && input.players[seatIndex].isHuman) {
+    const review = buildReview(input, action);
+    state.reviews.push(review);
+    recordTrainingDecision(state, input, review);
+  }
 
   if (activePlayers(state).length === 1) return awardUncontested(state);
   if (bettingComplete(state)) return advanceStreet(state);
@@ -822,6 +867,24 @@ const DEEP_THREE_BET_RANGES = Object.fromEntries(Object.entries(DEEP_THREE_BET_S
 const DEEP_FOUR_BET_RANGE = expandRange("QQ+ AKs AKo");
 const DEEP_PREMIUM_STACK_OFF_RANGE = expandRange("KK+");
 const DEEP_FOUR_BET_CONTINUE_RANGE = expandRange("QQ+ AKs AKo");
+const BB_DEFENSE_SPECS: Partial<Record<Position, string>> = {
+  UTG: "22+ A2s+ ATo+ K9s+ KQo Q9s+ J9s+ T9s 98s 87s",
+  HJ: "22+ A2s+ A9o+ K7s+ KJo+ Q8s+ QJo J8s+ T8s+ 97s+ 86s+ 75s+",
+  CO: "22+ A2s+ A7o+ K4s+ K9o+ Q6s+ Q9o+ J7s+ J9o+ T7s+ T9o 96s+ 86s+ 75s+ 65s 54s",
+  BTN: "22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s",
+  SB: "22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s",
+};
+const BB_THREE_BET_SPECS: Partial<Record<Position, string>> = {
+  UTG: "QQ+ AKs AKo A5s",
+  HJ: "JJ+ AQs+ AKo A5s",
+  CO: "TT+ AJs+ AQo+ A5s A4s KQs",
+  BTN: "88+ ATs+ AJo+ A5s A4s KJs+ QJs",
+  SB: "77+ A8s+ ATo+ KTs+ KQo QJs A5s A4s",
+};
+const BB_DEFENSE_RANGES = Object.fromEntries(Object.entries(BB_DEFENSE_SPECS).map(([position, specification]) => [position, expandRange(specification!)])) as Partial<Record<Position, Set<string>>>;
+const BB_THREE_BET_RANGES = Object.fromEntries(Object.entries(BB_THREE_BET_SPECS).map(([position, specification]) => [position, expandRange(specification!)])) as Partial<Record<Position, Set<string>>>;
+const SB_LIMP_SPEC = "22+ A2s+ K2s+ Q4s+ J6s+ T6s+ 95s+ 85s+ 74s+ 64s+ 54s A2o+ K7o+ Q8o+ J8o+ T8o+ 98o";
+const SB_LIMP_RANGE = expandRange(SB_LIMP_SPEC);
 const BB_VS_SB_CONTINUE_RANGE = expandRange("22+ A2s+ A2o+ K2s+ K7o+ Q5s+ Q8o+ J7s+ J8o+ T7s+ T8o+ 96s+ 97o+ 86s+ 87o 75s+ 65s 54s");
 const BB_VS_SB_THREE_BET_RANGE = expandRange("77+ A8s+ ATo+ KTs+ KQo QJs A5s A4s");
 
@@ -851,10 +914,34 @@ export const PREFLOP_CHARTS: PreflopChartDefinition[] = [
   },
   {
     id: "continue",
-    label: "Continue vs raise",
-    description: "Baseline hands that can continue by calling or re-raising. Your own position, the price and players behind still matter.",
+    label: "General continue",
+    description: "A general response baseline indexed by the original raiser's position. Use the dedicated blind-defense chart when you are in the BB.",
     selectorLabel: "Raiser's position",
     options: chartOptions(DEEP_CONTINUE_SPECS, SIX_MAX_CHART_POSITIONS),
+  },
+  {
+    id: "bb-defense",
+    label: "BB defense",
+    description: "Position-pair ranges for the big blind against each opener. A larger open tightens the marginal calling portion; a smaller open widens it.",
+    selectorLabel: "Original raiser",
+    options: chartOptions(BB_DEFENSE_SPECS, ["UTG", "HJ", "CO", "BTN", "SB"]),
+  },
+  {
+    id: "bb-three-bet",
+    label: "BB 3-bet",
+    description: "Value and blocker-driven re-raises from the big blind, indexed by the opener's position.",
+    selectorLabel: "Original raiser",
+    options: chartOptions(BB_THREE_BET_SPECS, ["UTG", "HJ", "CO", "BTN", "SB"]),
+  },
+  {
+    id: "sb-mixed",
+    label: "SB first-in",
+    description: "The small blind mixes raises and limps because it has only one player behind but will be out of position after the flop.",
+    selectorLabel: "Action",
+    options: [
+      { label: "Raise", specification: DEEP_OPEN_SPECS.SB, hands: [...DEEP_OPEN_RANGES.SB] },
+      { label: "Limp or mix", specification: SB_LIMP_SPEC, hands: [...SB_LIMP_RANGE] },
+    ],
   },
   {
     id: "three-bet",
@@ -991,6 +1078,11 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
     if (state.raiseCount === 0) {
       const limperActions = preflopActions.filter((action) => action.type === "call" && action.raiseLevel === 0);
       const limpers = limperActions.length;
+      if (player.position === "SB" && limpers === 0) {
+        if (DEEP_OPEN_RANGES.SB.has(hand)) return preflopPlan(hand, effectiveStackBb, "Small blind first-in", `${hand} belongs to the SB raising range, with some limps retained to protect the passive line.`, { raise: 0.72, call: 0.24, fold: 0.04 });
+        if (SB_LIMP_RANGE.has(hand)) return preflopPlan(hand, effectiveStackBb, "Small blind first-in", `${hand} can complete for one more small blind but is not strong enough to raise at full frequency out of position.`, { call: 0.76, raise: 0.12, fold: 0.12 });
+        return preflopPlan(hand, effectiveStackBb, "Small blind first-in", `${hand} is outside the modeled SB participation range despite having only one player behind.`, { fold: 0.88, call: 0.1, raise: 0.02 });
+      }
       const stickyLimp = limperActions.some((action) => {
         const stats = state.players[action.seat].stats;
         return stats.hands >= 25 && (stats.vpip - stats.pfr) / stats.hands >= 0.24;
@@ -1036,14 +1128,19 @@ export function analyzePreflopSpot(state: HandState, seatIndex: number): Preflop
       if (hand === "JJ" || hand === "TT" || hand === "AQs" || hand === "AKo") return preflopPlan(hand, effectiveStackBb, scenario, `${pressureExplanation} ${hand} is near the top of the continuing range, but the two potentially strong ranges still require a tight defense.`, { call: 0.42, fold: 0.48, raise: 0.1 });
       return preflopPlan(hand, effectiveStackBb, scenario, `${pressureExplanation} Continue only with a very strong range; ${hand} should usually fold.`, { fold: 0.92, call: 0.08 });
     }
-    if (state.raiseCount === 1 && player.position === "BB" && (openerPosition === "SB" || openerPosition === "BTN/SB")) {
-      if (BB_VS_SB_THREE_BET_RANGE.has(hand)) {
-        return preflopPlan(hand, effectiveStackBb, `BB defending against a ${openerPosition} open`, `${hand} is strong enough to mix a value or pressure three-bet against the small blind's wide opening range.`, { raise: 0.56, call: 0.4, fold: 0.04 });
+    if (state.raiseCount === 1 && player.position === "BB" && BB_DEFENSE_RANGES[openerPosition]) {
+      const openingAction = aggressiveActions[0];
+      const openSizeBb = Math.max(2, (openingAction?.amount ?? 5) / 2);
+      const priceAdjustment = openSizeBb <= 2.25 ? 0.08 : openSizeBb >= 3 ? -0.08 : 0;
+      const scenario = `BB defending against a ${openerPosition} ${openSizeBb.toFixed(1)} BB open`;
+      if (BB_THREE_BET_RANGES[openerPosition]!.has(hand)) {
+        return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is strong enough to mix a value or blocker-driven three-bet against this ${openerPosition} opening range.`, { raise: 0.54, call: 0.42, fold: 0.04 });
       }
-      if (BB_VS_SB_CONTINUE_RANGE.has(hand)) {
-        return preflopPlan(hand, effectiveStackBb, `BB defending against a ${openerPosition} open`, `${hand} receives a favorable price and closes the action against a wide small-blind range.`, { call: 0.78, raise: 0.04, fold: 0.18 });
+      if (BB_DEFENSE_RANGES[openerPosition]!.has(hand)) {
+        const call = Math.max(0.48, Math.min(0.88, 0.72 + priceAdjustment));
+        return preflopPlan(hand, effectiveStackBb, scenario, `${hand} is inside the dedicated BB-versus-${openerPosition} defense range. The big blind closes the action, while the ${openSizeBb.toFixed(1)} BB size determines the price.`, { call, raise: 0.04, fold: 0.96 - call });
       }
-      return preflopPlan(hand, effectiveStackBb, `BB defending against a ${openerPosition} open`, `${hand} remains outside the modeled blind-defense range despite the favorable position and price.`, { fold: 0.94, call: 0.06 });
+      return preflopPlan(hand, effectiveStackBb, scenario, `${hand} remains outside the dedicated BB-versus-${openerPosition} range at this price.`, { fold: openSizeBb <= 2.25 ? 0.86 : 0.94, call: openSizeBb <= 2.25 ? 0.14 : 0.06 });
     }
     if (state.raiseCount === 1 && DEEP_THREE_BET_RANGES[openerPosition].has(hand)) {
       const premium = PREMIUM_SHORT_RANGE.has(hand);
@@ -1316,6 +1413,134 @@ export function estimateRangeEquity(
     }
   }
   return shares / iterations;
+}
+
+function responseRangeWeight(state: HandState, opponentIndex: number, cards: Card[], betFraction: number) {
+  const features = handFeatures(cards, state.board);
+  const madeContinue = features.made >= 4 ? 3.8
+    : features.made === 3 ? 3.2
+      : features.made === 2 ? 2.6
+        : features.made === 1 ? 1.15
+          : 0.16;
+  const drawContinue = state.street === "river" ? 0 : features.draw ? 1.35 : features.overcards > 0 && state.street === "flop" ? 0.42 : 0;
+  const sizePressure = Math.max(0.52, 1 - Math.max(0, betFraction - 0.35) * 0.42);
+  const mediumHandPressure = features.made === 1 ? sizePressure : 1;
+  return opponentRangeWeight(state, opponentIndex, cards) * Math.max(0.03, (madeContinue + drawContinue) * mediumHandPressure);
+}
+
+function estimateResponseEquity(
+  state: HandState,
+  seatIndex: number,
+  betFraction: number,
+  iterations: number,
+  random: () => number,
+) {
+  const hole = state.players[seatIndex].hole;
+  if (hole.length !== 2) return 0;
+  const context = buildBotContext(state, seatIndex);
+  const known = new Set([...hole, ...state.board].map(cardLabel));
+  let shares = 0;
+  for (let run = 0; run < iterations; run += 1) {
+    const available = shuffledDeck(random).filter((card) => !known.has(cardLabel(card)));
+    const rivals = context.opponents.map((opponent) => weightedHoleSample(
+      available,
+      (cards) => responseRangeWeight(state, opponent, cards, betFraction),
+      random,
+    ));
+    const completed = [...state.board];
+    while (completed.length < 5) completed.push(available.pop()!);
+    const hero = evaluateHand([...hole, ...completed]).score;
+    const scores = rivals.map((cards) => evaluateHand([...cards, ...completed]).score);
+    if (!scores.some((score) => compareScores(score, hero) > 0)) {
+      shares += 1 / (scores.filter((score) => compareScores(score, hero) === 0).length + 1);
+    }
+  }
+  return shares / iterations;
+}
+
+function actionLabel(state: HandState, action: PokerAction) {
+  if (action.type === "raise") return `${state.currentBet > 0 ? "Raise" : "Bet"} to $${action.amount}`;
+  if (action.type === "all-in") return `All-in to $${state.players[state.currentActor]?.streetBet + state.players[state.currentActor]?.stack}`;
+  return action.type[0].toUpperCase() + action.type.slice(1);
+}
+
+function postflopCandidates(state: HandState, seatIndex: number) {
+  const bounds = legalBounds(state, seatIndex);
+  const actions: PokerAction[] = bounds.toCall > 0 ? [{ type: "fold" }, { type: "call" }] : [{ type: "check" }];
+  if (!bounds.canRaise) return actions;
+  const pot = potTotal(state);
+  const targets = [0.33, 0.5, 0.75, 1].map((fraction) => Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + pot * fraction))));
+  [...new Set(targets)].forEach((amount) => actions.push(amount === bounds.max ? { type: "all-in" } : { type: "raise", amount }));
+  const context = buildBotContext(state, seatIndex);
+  if (context.spr <= 2.5 && !actions.some((action) => action.type === "all-in")) actions.push({ type: "all-in" });
+  return actions;
+}
+
+export function evaluatePostflopActions(
+  state: HandState,
+  seatIndex: number,
+  iterations = 180,
+  random: () => number = Math.random,
+): ActionEvaluation[] {
+  if (state.street === "preflop" || state.players[seatIndex].hole.length !== 2) return [];
+  const context = buildBotContext(state, seatIndex);
+  const bounds = legalBounds(state, seatIndex);
+  const pot = potTotal(state);
+  const player = state.players[seatIndex];
+  const overallEquity = estimateRangeEquity(state, seatIndex, iterations, random);
+  const modelError = 0.055 + Math.max(0, context.activePlayers - 2) * 0.018;
+  const observedGap = context.opponents.reduce((sum, index) => {
+    const stats = state.players[index].stats;
+    return sum + (stats.hands ? (stats.vpip - stats.pfr) / stats.hands : 0.1);
+  }, 0) / Math.max(1, context.opponents.length);
+  return postflopCandidates(state, seatIndex).map((action) => {
+    let ev = 0;
+    let foldProbability: number | undefined;
+    let equityWhenCalled: number | undefined;
+    let raiseProbability: number | undefined;
+    let scale = pot;
+    if (action.type === "fold") {
+      ev = 0;
+    } else if (action.type === "check") {
+      const realization = state.street === "river" ? 1 : context.inPosition ? 0.94 : 0.82;
+      ev = overallEquity * pot * realization;
+    } else if (action.type === "call") {
+      const call = Math.min(bounds.toCall, player.stack);
+      scale = pot + call;
+      const realization = state.street === "river" ? 1 : context.inPosition ? 0.94 : 0.84;
+      ev = overallEquity * (pot + call) * realization - call;
+    } else {
+      const target = action.type === "all-in" ? bounds.max : action.amount!;
+      const invest = Math.max(0, target - player.streetBet);
+      const fraction = invest / Math.max(1, pot);
+      const perOpponentFold = Math.max(0.08, Math.min(0.78,
+        0.24 + fraction * 0.31 + (state.street === "river" ? 0.08 : 0) - Math.max(0, observedGap - 0.08) * 1.35,
+      ));
+      foldProbability = Math.pow(perOpponentFold, context.opponents.length);
+      equityWhenCalled = estimateResponseEquity(state, seatIndex, fraction, Math.max(8, Math.min(20, Math.round(iterations * 0.3))), random);
+      const expectedCallers = Math.max(1, context.opponents.length * (1 - perOpponentFold));
+      const opponentCall = Math.max(0, target - state.currentBet);
+      const calledPot = pot + invest + opponentCall * expectedCallers;
+      scale = calledPot;
+      const observedAggression = context.opponents.reduce((sum, index) => {
+        const stats = state.players[index].stats;
+        return sum + (stats.hands ? stats.aggression / Math.max(1, stats.hands) : 0.2);
+      }, 0) / Math.max(1, context.opponents.length);
+      raiseProbability = Math.max(0.02, Math.min(0.28, (1 - foldProbability) * (0.08 + observedAggression * 0.16)));
+      ev = foldProbability * pot + (1 - foldProbability) * (equityWhenCalled * calledPot - invest) - raiseProbability * invest * 0.16;
+    }
+    const uncertainty = Math.max(1, scale * modelError);
+    return {
+      action,
+      label: actionLabel({ ...state, currentActor: seatIndex }, action),
+      ev: Math.round(ev * 10) / 10,
+      evLow: Math.round((ev - uncertainty) * 10) / 10,
+      evHigh: Math.round((ev + uncertainty) * 10) / 10,
+      foldProbability,
+      equityWhenCalled,
+      raiseProbability,
+    };
+  }).sort((a, b) => b.ev - a.ev);
 }
 
 function estimateRangeEquityV7(
@@ -1913,10 +2138,45 @@ export function decideBotCandidate(state: HandState, seatIndex: number, random: 
   return decideBotCandidateFromPublicState(publicState, seatIndex, random);
 }
 
+// Frozen production policy from Site version 19. Future candidates are always
+// compared against this boundary rather than silently moving the baseline.
+export function decideBotV8(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  return decideBotCandidate(state, seatIndex, random);
+}
+
+function evaluationForAction(evaluations: ActionEvaluation[], action: PokerAction) {
+  const sameType = evaluations.filter((evaluation) => evaluation.action.type === action.type);
+  if (action.type !== "raise") return sameType[0];
+  return sameType.sort((a, b) => Math.abs((a.action.amount ?? 0) - (action.amount ?? 0)) - Math.abs((b.action.amount ?? 0) - (action.amount ?? 0)))[0];
+}
+
+function decideBotV9FromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  const baseline = decideBotCandidateFromPublicState(state, seatIndex, random);
+  if (state.street === "preflop") {
+    const plan = analyzePreflopSpot(state, seatIndex);
+    if (!plan) return baseline;
+    const player = state.players[seatIndex];
+    const bounds = legalBounds(state, seatIndex);
+    if (player.position === "SB" && state.raiseCount === 0 && plan.scenario === "Small blind first-in") {
+      // The mixed chart is exposed to the coach, but the first candidate's
+      // broad limping override lost to V8 in paired play. Preserve V8 until a
+      // narrower SB mix clears the promotion gate.
+      return baseline;
+    }
+    if (player.position === "BB" && state.raiseCount === 1 && plan.scenario.startsWith("BB defending")) {
+      if ((player.profile === "balanced" || player.profile === "tag") && plan.preferred === "call" && baseline.type === "fold" && random() < 0.18) return { type: "call" };
+      if ((player.profile === "balanced" || player.profile === "tag") && plan.preferred === "fold" && baseline.type === "call" && random() < 0.22) return { type: "fold" };
+      if (plan.frequencies.raise >= 0.5 && bounds.canRaise && baseline.type !== "raise" && random() < 0.2) return contextualPreflopRaise(state, seatIndex);
+    }
+    return baseline;
+  }
+  // Action-EV is used as an explanatory coach until its response model clears
+  // the paired-play promotion gate. V8 remains the postflop production policy.
+  return baseline;
+}
+
 function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  // Promoted after clearing the paired, seat-swapped benchmark at 40, 100,
-  // and 200 BB, plus the exact-policy identity and personality checks.
-  return decideBotCandidateFromPublicState(state, seatIndex, random);
+  return decideBotV9FromPublicState(state, seatIndex, random);
 }
 
 export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
@@ -1969,7 +2229,7 @@ function downgradeForSizing(grade: ReviewItem["grade"], state: HandState, action
   return grade === "Preferred" ? "Viable" : "Costly";
 }
 
-function buildReview(state: HandState, action: PokerAction): ReviewItem {
+function buildReviewV8(state: HandState, action: PokerAction): ReviewItem {
   const player = state.players[humanSeat];
   const toCall = toCallFor(state, humanSeat);
   const pot = potTotal(state);
@@ -2107,10 +2367,122 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   };
 }
 
+function formatEv(value: number) {
+  return `${value >= 0 ? "+" : "−"}$${Math.abs(value).toFixed(1)}`;
+}
+
+function buildReview(state: HandState, action: PokerAction): ReviewItem {
+  const baseline = buildReviewV8(state, action);
+  if (state.street === "preflop") return baseline;
+  const reviewIterations = 48;
+  const evaluations = evaluatePostflopActions(state, humanSeat, reviewIterations, seededRandom(reviewSeed(state) ^ 0x9e3779b9));
+  const best = evaluations[0];
+  const chosen = evaluationForAction(evaluations, action);
+  if (!best || !chosen) return baseline;
+  const regret = Math.max(0, best.ev - chosen.ev);
+  const closeThreshold = Math.max(1.5, potTotal(state) * 0.045);
+  const costlyThreshold = Math.max(4, potTotal(state) * 0.13);
+  const intervalsOverlap = chosen.evHigh >= best.evLow;
+  let grade: ReviewItem["grade"] = chosen === best || regret <= closeThreshold
+    ? "Preferred"
+    : regret >= costlyThreshold && !intervalsOverlap ? "Costly" : "Viable";
+  const features = handFeatures(state.players[humanSeat].hole, state.board);
+  const concept = state.street === "river" && state.currentBet === 0 && features.made === 1 ? "Thin river value"
+    : state.currentBet > 0 ? "Price, range and response EV"
+      : best.action.type === "raise" || best.action.type === "all-in" ? "Value, folds and bet sizing" : "Checking and equity realization";
+  let alternatives = evaluations.map((evaluation) => {
+    const actionRegret = Math.max(0, best.ev - evaluation.ev);
+    const overlap = evaluation.evHigh >= best.evLow;
+    const verdict: ReviewItem["grade"] = evaluation === best || actionRegret <= closeThreshold ? "Preferred"
+      : actionRegret >= costlyThreshold && !overlap ? "Costly" : "Viable";
+    const response = evaluation.foldProbability !== undefined
+      ? `${Math.round(evaluation.foldProbability * 100)}% estimated immediate folds; ${Math.round((evaluation.equityWhenCalled ?? 0) * 100)}% equity against the modeled calling range.`
+      : evaluation.action.type === "fold" ? "Folding invests no additional chips."
+        : "This line realizes equity without relying on immediate folds.";
+    return {
+      action: evaluation.label,
+      verdict,
+      ev: evaluation.ev,
+      evLow: evaluation.evLow,
+      evHigh: evaluation.evHigh,
+      foldProbability: evaluation.foldProbability,
+      equityWhenCalled: evaluation.equityWhenCalled,
+      reason: `${formatEv(evaluation.ev)} modeled EV (${formatEv(evaluation.evLow)} to ${formatEv(evaluation.evHigh)}). ${response}`,
+    };
+  });
+  const separation = evaluations[1] ? best.evLow - evaluations[1].evHigh : 0;
+  const confidence: ReviewItem["confidence"] = separation > Math.max(2, potTotal(state) * 0.06) ? "High" : intervalsOverlap ? "Low" : "Medium";
+  const conservativeThinValue = concept === "Thin river value" && action.type === "check" && intervalsOverlap && baseline.grade === "Preferred";
+  if (conservativeThinValue) {
+    grade = "Preferred";
+    alternatives = alternatives.map((alternative) => ({
+      ...alternative,
+      verdict: alternative.action === chosen.label ? "Preferred" : alternative.verdict === "Preferred" ? "Viable" : alternative.verdict,
+    }));
+  }
+  const thinValueNote = concept === "Thin river value"
+    ? "The comparison discounts missed draws that improve showdown equity but usually fold. A river bet needs enough worse hands in the calling range, not merely a high chance of being ahead before betting."
+    : "The estimate compares legal actions using likely folds, the range that continues, future-card equity, position, stack depth and rake. Overlapping ranges indicate a genuinely close decision.";
+  return {
+    ...baseline,
+    grade,
+    suggestion: conservativeThinValue ? baseline.suggestion : best.label,
+    concept,
+    takeaway: concept === "Thin river value"
+      ? "Judge a river value bet against the opponent's calling range. Hands that fold do not pay you simply because you were ahead of them."
+      : "Compare actions by expected value, then treat small differences as mixes rather than absolute rules.",
+    alternatives,
+    note: thinValueNote,
+    confidence,
+    basis: `${evaluations.length} legal actions · ${reviewIterations} repeatable range-weighted rollouts · EV intervals include model uncertainty`,
+    estimatedRegret: Math.round(regret * 10) / 10,
+    recommendedSize: best.action.type === "raise" && best.action.amount !== undefined ? sizeBand(best.action.amount, legalBounds(state, humanSeat)) : undefined,
+  };
+}
+
+function leakForDecision(state: HandState, review: ReviewItem): LeakKey {
+  if (state.street === "preflop") {
+    if (state.players[humanSeat].position === "BB") return "bb-defense";
+    if (state.raiseCount >= 2) return "three-bet-defense";
+    return "preflop-aggression";
+  }
+  if (review.concept === "Thin river value") return "thin-value";
+  if (state.currentBet > 0) return "calling-price";
+  if (review.action.startsWith("Bet") || review.action.startsWith("Raise") || review.action.startsWith("All-in")) {
+    return review.grade === "Costly" ? "bluff-selection" : "bet-sizing";
+  }
+  return "missed-value";
+}
+
+function recordTrainingDecision(state: HandState, before: HandState, review: ReviewItem) {
+  const leakKey = leakForDecision(before, review);
+  const regret = review.estimatedRegret ?? (review.grade === "Costly" ? Math.max(2, review.pot * 0.1) : 0);
+  const mistake = review.grade === "Costly" || regret >= Math.max(2, review.pot * 0.1);
+  const decision: TrainingDecision = {
+    id: review.id,
+    handNumber: review.handNumber,
+    street: review.street,
+    position: review.position,
+    chosenAction: review.action,
+    recommendedAction: review.suggestion,
+    concept: review.concept,
+    leakKey,
+    estimatedRegret: Math.round(regret * 10) / 10,
+    confidence: review.confidence ?? "Low",
+  };
+  state.trainingDecisions = [...state.trainingDecisions, decision].slice(-240);
+  const prior = state.trainingSummary[leakKey];
+  state.trainingSummary[leakKey] = {
+    opportunities: prior.opportunities + 1,
+    mistakes: prior.mistakes + (mistake ? 1 : 0),
+    totalRegret: Math.round((prior.totalRegret + regret) * 10) / 10,
+  };
+}
+
 export function isValidSavedState(value: unknown): value is HandState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<HandState>;
-  return candidate.version === 8
+  return candidate.version === 9
     && typeof candidate.raiseCount === "number"
     && Array.isArray(candidate.actionLog)
     && Array.isArray(candidate.players)
@@ -2120,6 +2492,8 @@ export function isValidSavedState(value: unknown): value is HandState {
     && Array.isArray(candidate.board)
     && Array.isArray(candidate.reviews)
     && Array.isArray(candidate.reviewArchive)
+    && Array.isArray(candidate.trainingDecisions)
+    && Boolean(candidate.trainingSummary)
     && typeof candidate.sessionRake === "number";
 }
 
@@ -2127,10 +2501,10 @@ export function migrateSavedState(value: unknown): HandState | null {
   if (isValidSavedState(value)) return value;
   if (!value || typeof value !== "object") return null;
   const legacy = value as Omit<Partial<HandState>, "version"> & { version?: number };
-  if (![4, 5, 6, 7].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
+  if (![4, 5, 6, 7, 8].includes(legacy.version ?? 0) || !Array.isArray(legacy.players) || legacy.players.length !== 6) return null;
   const migrated = {
     ...legacy,
-    version: 8,
+    version: 9,
     players: legacy.players.map((player) => ({
       ...player,
       stats: { ...emptyStats(), ...player.stats },
@@ -2142,6 +2516,8 @@ export function migrateSavedState(value: unknown): HandState | null {
     actionLog: legacy.actionLog ?? [],
     reviews: [],
     reviewArchive: [],
+    trainingDecisions: legacy.trainingDecisions ?? [],
+    trainingSummary: legacy.trainingSummary ?? emptyTrainingSummary(),
     sessionRake: legacy.sessionRake ?? 0,
   } as HandState;
   // A v4 in-progress hand lacks the public action sequence required by the

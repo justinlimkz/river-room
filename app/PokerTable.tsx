@@ -22,11 +22,21 @@ import {
   type Seat,
 } from "./poker-engine";
 
-const STORAGE_KEY = "riverroom-session-v8";
-const LEGACY_STORAGE_KEYS = ["riverroom-session-v7", "riverroom-session-v6", "riverroom-session-v5", "riverroom-session-v4"];
+const STORAGE_KEY = "riverroom-session-v9";
+const LEGACY_STORAGE_KEYS = ["riverroom-session-v8", "riverroom-session-v7", "riverroom-session-v6", "riverroom-session-v5", "riverroom-session-v4"];
 const SYMBOLS = { clubs: "♣", diamonds: "♦", hearts: "♥", spades: "♠" };
 const SEAT_CLASS = ["seat top-left", "seat top-center", "seat top-right", "seat mid-right", "seat mid-left", "seat hero"];
 const CHART_RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"];
+const LEAK_LABELS = {
+  "bb-defense": "Big blind defense",
+  "preflop-aggression": "Preflop aggression",
+  "three-bet-defense": "Facing 3-bets",
+  "missed-value": "Missed value bets",
+  "thin-value": "Thin river value",
+  "bluff-selection": "Bluff selection",
+  "calling-price": "Calls and pot odds",
+  "bet-sizing": "Bet sizing",
+} as const;
 
 function PlayingCard({ card, hidden = false, small = false }: { card?: Card; hidden?: boolean; small?: boolean }) {
   if (hidden || !card) return <div className={`card card-back ${small ? "small" : ""}`} aria-label="Face-down card"><span>RR</span></div>;
@@ -133,6 +143,7 @@ function ReviewPanel({ items, title, onClose }: { items: ReviewItem[]; title: st
                 </div>
                 {item.equity !== undefined && <div className="equity-strip"><span><small>Estimated equity vs likely hands</small><strong>{Math.round((item.equityLow ?? item.equity) * 100)}–{Math.round((item.equityHigh ?? item.equity) * 100)}%</strong></span><span><small>Pot odds (price to call)</small><strong>{Math.round(item.potOdds * 100)}%</strong></span></div>}
                 <p className="review-verdict"><strong>Recommended baseline: {item.suggestion}.</strong> {item.note}</p>
+                {item.estimatedRegret !== undefined && <p className="ev-summary"><strong>Modeled opportunity cost:</strong> about ${item.estimatedRegret.toFixed(1)} versus the highest-EV line. Treat small gaps and overlapping intervals as mixes.</p>}
                 {item.recommendedSize && <p className="size-guidance">Sizing guide: target ${item.recommendedSize.target}; approximately ${item.recommendedSize.min}–${item.recommendedSize.max} remains reasonable.</p>}
                 <div className="review-alternatives" aria-label="Action comparison">
                   {item.alternatives.map((alternative) => <div key={alternative.action}><b className={`mini-grade ${alternative.verdict.toLowerCase()}`}>{alternative.verdict}</b><strong>{alternative.action}{alternative.frequency !== undefined ? ` · ${Math.round(alternative.frequency * 100)}%` : ""}</strong><span>{alternative.reason}</span></div>)}
@@ -358,6 +369,11 @@ export default function PokerTable() {
   const postflopDecisions = heroStats.postflopFolds + heroStats.postflopCalls + heroStats.postflopRaises + heroStats.postflopChecks;
   const seatedPlayers = state.players.filter((player) => player.stack > 0 || player.hole.length > 0).length;
   const quickRaise = (fraction: number) => Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + pot * fraction)));
+  const trainingLeaks = Object.entries(state.trainingSummary)
+    .map(([key, stat]) => ({ key: key as keyof typeof LEAK_LABELS, ...stat, score: (stat.mistakes + 2) / (stat.opportunities + 8) }))
+    .filter((leak) => leak.opportunities >= 8)
+    .sort((a, b) => b.score - a.score || b.totalRegret - a.totalRegret)
+    .slice(0, 3);
 
   return (
     <main className="app-shell">
@@ -464,6 +480,16 @@ export default function PokerTable() {
               ]}
               note={`${postflopDecisions} decisions after the flop`}
             />
+            <section className="leak-dashboard" aria-label="Training focus">
+              <div className="stat-section-title"><strong>TRAINING FOCUS</strong><span>confidence-adjusted</span></div>
+              {trainingLeaks.length ? trainingLeaks.map((leak) => (
+                <div className="leak-row" key={leak.key}>
+                  <span><strong>{LEAK_LABELS[leak.key]}</strong><small>{leak.mistakes} costly choices in {leak.opportunities} spots · ${leak.totalRegret.toFixed(0)} modeled cost</small></span>
+                  <b>{leak.opportunities >= 30 ? "Established" : leak.opportunities >= 15 ? "Emerging" : "Early"}</b>
+                </div>
+              )) : <p className="leak-empty">Keep playing: each category needs at least 8 relevant decisions before it is labeled a possible leak.</p>}
+              {trainingLeaks[0] && <p className="practice-focus"><strong>Next-session drill:</strong> pause on every {LEAK_LABELS[trainingLeaks[0].key].toLowerCase()} spot and state your range, price, and purpose before acting.</p>}
+            </section>
             {(state.reviewArchive.length > 0 || state.reviews.length > 0) && <button className="review-history-button" onClick={() => setReviewMode("history")}>Review learning history · {state.reviewArchive.length + state.reviews.length}</button>}
           </section>
           <p className="privacy-note">Saved on this device. Opponents never see hidden cards.</p>
