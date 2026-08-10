@@ -28,6 +28,23 @@ export type BoardProfile = {
   dynamic: boolean;
   highCard: number;
 };
+export type FlopTexture = BoardProfile & {
+  band: "ace-high" | "king-high" | "middle" | "low";
+  connectedness: number;
+  tone: "rainbow" | "two-tone" | "monotone";
+  stability: "static" | "dynamic";
+};
+export type TurnBucket = "blank" | "overcard" | "flush-completing" | "straight-completing" | "board-pairing" | "draw-adding";
+export type FlopStrategyModule = "value" | "cbet-suppression" | "range-bet" | "check-raise" | "defense";
+export type FlopStrategicContext = {
+  texture: FlopTexture;
+  handClass: StrategicHandClass;
+  rangeAdvantage: number;
+  nutAdvantage: number;
+  valueDensity: number;
+  drawDensity: number;
+  turnBuckets: Record<TurnBucket, number>;
+};
 export type RangeCombo = { cards: [Card, Card]; weight: number; handClass: StrategicHandClass };
 export type RangeLedger = Record<number, RangeCombo[]>;
 export type LeakKey = "bb-defense" | "preflop-aggression" | "three-bet-defense" | "missed-value" | "thin-value" | "bluff-selection" | "calling-price" | "bet-sizing";
@@ -2007,6 +2024,76 @@ export function analyzeBoard(board: Card[]): BoardProfile {
   };
 }
 
+export function analyzeFlopTexture(board: Card[]): FlopTexture {
+  const flop = board.slice(0, 3);
+  const base = analyzeBoard(flop);
+  const ranks = [...new Set(flop.map((card) => VALUES[card.rank]))].sort((a, b) => a - b);
+  const span = ranks.length > 1 ? ranks.at(-1)! - ranks[0] : 0;
+  const adjacent = ranks.slice(1).filter((rank, index) => rank - ranks[index] <= 2).length;
+  const connectedness = Math.max(0, Math.min(1, adjacent * 0.34 + (span <= 5 ? 0.32 : span <= 8 ? 0.14 : 0)));
+  const suitCount = Math.max(0, ...SUITS.map((suit) => flop.filter((card) => card.suit === suit).length));
+  const tone: FlopTexture["tone"] = suitCount >= 3 ? "monotone" : suitCount === 2 ? "two-tone" : "rainbow";
+  const band: FlopTexture["band"] = base.highCard === 14 ? "ace-high" : base.highCard === 13 ? "king-high" : base.highCard >= 9 ? "middle" : "low";
+  const dynamic = !base.paired && (tone !== "rainbow" || connectedness >= 0.45);
+  return { ...base, band, connectedness, tone, dynamic, stability: dynamic ? "dynamic" : "static" };
+}
+
+function representativeTurnBuckets(hole: Card[], flop: Card[]): Record<TurnBucket, number> {
+  const known = new Set([...hole, ...flop].map(cardLabel));
+  const texture = analyzeFlopTexture(flop);
+  const boardRanks = new Set(flop.map((card) => VALUES[card.rank]));
+  const boardSuits = new Map<Suit, number>();
+  flop.forEach((card) => boardSuits.set(card.suit, (boardSuits.get(card.suit) ?? 0) + 1));
+  const buckets: Record<TurnBucket, number> = { blank: 0, overcard: 0, "flush-completing": 0, "straight-completing": 0, "board-pairing": 0, "draw-adding": 0 };
+  for (const card of makeDeck()) {
+    if (known.has(cardLabel(card))) continue;
+    if (boardRanks.has(VALUES[card.rank])) buckets["board-pairing"] += 1;
+    else if ((boardSuits.get(card.suit) ?? 0) >= 2) buckets["flush-completing"] += 1;
+    else if (analyzeBoard([...flop, card]).fourStraight && !texture.fourStraight) buckets["straight-completing"] += 1;
+    else if (VALUES[card.rank] > texture.highCard) buckets.overcard += 1;
+    else if (analyzeFlopTexture([...flop.slice(0, 2), card]).dynamic && !texture.dynamic) buckets["draw-adding"] += 1;
+    else buckets.blank += 1;
+  }
+  const total = Object.values(buckets).reduce((sum, count) => sum + count, 0) || 1;
+  (Object.keys(buckets) as TurnBucket[]).forEach((bucket) => { buckets[bucket] /= total; });
+  return buckets;
+}
+
+export function analyzeFlopStrategy(state: HandState, seatIndex: number): FlopStrategicContext | null {
+  if (state.street !== "flop" || state.board.length < 3 || state.players[seatIndex].hole.length !== 2) return null;
+  const context = buildBotContext(state, seatIndex);
+  const texture = analyzeFlopTexture(state.board);
+  const handClass = classifyStrategicHand(state.players[seatIndex].hole, state.board);
+  const isAggressor = context.aggressor === seatIndex;
+  const raisedPot = context.potType !== "limped";
+  const highDry = (texture.band === "ace-high" || texture.band === "king-high") && texture.stability === "static";
+  const lowDynamic = (texture.band === "middle" || texture.band === "low") && texture.dynamic;
+  const rangeAdvantage = Math.max(-1, Math.min(1,
+    (isAggressor ? 0.28 : -0.12) + (raisedPot && highDry ? (isAggressor ? 0.24 : -0.18) : 0) + (lowDynamic ? (isAggressor ? -0.2 : 0.16) : 0),
+  ));
+  const nutAdvantage = Math.max(-1, Math.min(1,
+    (isAggressor && highDry ? 0.22 : 0) + (!isAggressor && lowDynamic ? 0.25 : 0) + (texture.paired && isAggressor ? 0.08 : 0),
+  ));
+  // These are public-range priors for the real-time policy, not hand-reading
+  // claims. Full combo ledgers remain available to the coach/search model; the
+  // live bot uses bounded aggregate estimates so a decision stays instant.
+  const valueDensity = Math.max(0.08, Math.min(0.48,
+    0.2 + (isAggressor && highDry ? 0.1 : 0) + (!isAggressor && lowDynamic ? 0.09 : 0) + (texture.paired ? 0.04 : 0),
+  ));
+  const drawDensity = Math.max(0.03, Math.min(0.5,
+    0.08 + texture.connectedness * 0.2 + (texture.tone === "two-tone" ? 0.13 : texture.tone === "monotone" ? 0.06 : 0),
+  ));
+  return {
+    texture,
+    handClass,
+    rangeAdvantage,
+    nutAdvantage,
+    valueDensity,
+    drawDensity,
+    turnBuckets: representativeTurnBuckets(state.players[seatIndex].hole, state.board),
+  };
+}
+
 function classifyStrategicHandWithProfile(hole: Card[], board: Card[], profile: BoardProfile): StrategicHandClass {
   const features = handFeatures(hole, board);
   const score = features.made;
@@ -2435,6 +2522,127 @@ export function decideBotV11Candidate(state: HandState, seatIndex: number, rando
   return decideBotV11FromPublicState(publicState, seatIndex, random);
 }
 
+// Frozen production policy from Site version 22. Flop candidates are compared
+// against this boundary so the validated turn and river gains remain intact.
+export function decideBotV11(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  return decideBotV11Candidate(state, seatIndex, random);
+}
+
+function flopRaiseToFraction(state: HandState, seatIndex: number, fraction: number, allowAllIn = false): PokerAction {
+  const bounds = legalBounds(state, seatIndex);
+  const context = buildBotContext(state, seatIndex);
+  const target = Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + context.pot * fraction)));
+  if (target >= bounds.max && (allowAllIn || context.spr <= 0.8)) return { type: "all-in" };
+  return { type: "raise", amount: target };
+}
+
+function flopMadeHandDetails(hole: Card[], board: Card[]) {
+  const features = handFeatures(hole, board);
+  const boardRanks = board.map((card) => VALUES[card.rank]);
+  const holeValues = hole.map((card) => VALUES[card.rank]);
+  const pocketPair = hole[0].rank === hole[1].rank;
+  const overpair = pocketPair && holeValues[0] > Math.max(...boardRanks);
+  const pairedHole = hole.filter((card) => board.some((boardCard) => boardCard.rank === card.rank));
+  const topPair = pairedHole.some((card) => VALUES[card.rank] === Math.max(...boardRanks));
+  const topPairKicker = topPair ? Math.max(...hole.filter((card) => !pairedHole.includes(card)).map((card) => VALUES[card.rank]), 0) : 0;
+  return { ...features, overpair, topPair, topPairKicker };
+}
+
+const PROMOTED_FLOP_MODULES = new Set<FlopStrategyModule>(["value", "range-bet"]);
+
+function decideFlopV12(state: HandState, seatIndex: number, baseline: PokerAction, modules: ReadonlySet<FlopStrategyModule> = PROMOTED_FLOP_MODULES): PokerAction {
+  if (state.street !== "flop") return baseline;
+  const context = buildBotContext(state, seatIndex);
+  if (context.activePlayers !== 2) return baseline;
+  const effectiveStartingStack = Math.min(
+    state.players[seatIndex].stack + state.players[seatIndex].committed,
+    ...context.opponents.map((opponent) => state.players[opponent].stack + state.players[opponent].committed),
+  );
+  if (effectiveStartingStack > 300) return baseline;
+  const analysis = analyzeFlopStrategy(state, seatIndex);
+  if (!analysis) return baseline;
+  const player = state.players[seatIndex];
+  const bounds = legalBounds(state, seatIndex);
+  const details = flopMadeHandDetails(player.hole, state.board);
+  const mix = (salt: string) => stableDecisionMix(state, seatIndex, `v12-flop-${salt}`);
+  const aggressive = baseline.type === "raise" || baseline.type === "all-in";
+  const highConfidenceValue = analysis.handClass === "nuts" || analysis.handClass === "strong-value" || details.overpair;
+  const vulnerableValue = highConfidenceValue || (details.topPair && details.topPairKicker >= 11);
+  const valueFrequency: Record<BotProfile, number> = { balanced: 0.9, tag: 0.92, lag: 0.94, nit: 0.9, caller: 0.48 };
+
+  // A calling station's defining error is excessive calling, not random
+  // aggression. Preserve value raises and real semi-bluffs, but trim marginal
+  // baseline bets so the population stays observably passive.
+  if (modules.has("cbet-suppression") && player.profile === "caller" && aggressive && !highConfidenceValue && !details.draw && mix("caller-passivity") < 0.32) {
+    return bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+  }
+
+  // A: recover missed value and protection, especially on dynamic boards.
+  if (modules.has("value") && bounds.toCall === 0 && !aggressive && vulnerableValue && bounds.canRaise) {
+    const frequency = valueFrequency[player.profile] * (analysis.texture.dynamic ? 1 : highConfidenceValue ? 0.82 : 0.58);
+    if (mix("value") < frequency) return flopRaiseToFraction(state, seatIndex, analysis.texture.dynamic ? 0.72 : 0.42);
+  }
+
+  // B: suppress automatic c-bets where the caller owns more two-pair, sets,
+  // and strong draws. Retain bets with real equity or credible blockers.
+  const isCbet = context.aggressor === seatIndex && bounds.toCall === 0 && aggressive;
+  const weak = ["air", "showdown-value", "blocker-bluff"].includes(analysis.handClass) && !details.draw;
+  if (modules.has("cbet-suppression") && isCbet && weak && analysis.rangeAdvantage < 0.15 && analysis.texture.dynamic) {
+    const checkFrequency: Record<BotProfile, number> = { balanced: 0.68, tag: 0.74, lag: 0.46, nit: 0.78, caller: 0.9 };
+    if (mix("cbet-suppress") < checkFrequency[player.profile]) return { type: "check" };
+  }
+
+  // C: use a small range bet on static high-card boards where the preflop
+  // aggressor retains an equity and nut advantage.
+  if (modules.has("range-bet") && context.aggressor === seatIndex && bounds.toCall === 0 && !aggressive && bounds.canRaise
+    && analysis.rangeAdvantage >= 0.35 && analysis.texture.stability === "static") {
+    const highCardBluff = Math.max(...player.hole.map((card) => VALUES[card.rank])) >= 12;
+    const eligible = analysis.handClass !== "air" || details.overcards > 0 || highCardBluff || analysis.texture.paired;
+    const frequency: Record<BotProfile, number> = { balanced: 0.58, tag: 0.54, lag: 0.7, nit: 0.4, caller: 0.08 };
+    if (eligible && mix("range-bet") < frequency[player.profile]) return flopRaiseToFraction(state, seatIndex, 0.33);
+  }
+
+  if (bounds.toCall > 0) {
+    const streetActions = state.actionLog.filter((action) => action.street === "flop");
+    const checkedEarlier = streetActions.some((action) => action.seat === seatIndex && action.type === "check");
+    const betFraction = bounds.toCall / Math.max(1, context.pot);
+
+    // D: polarized check-raises—strong value plus robust draws, never random air.
+    const checkRaiseCandidate = highConfidenceValue || analysis.handClass === "combo-draw" || analysis.handClass === "nut-draw";
+    if (modules.has("check-raise") && checkedEarlier && bounds.canRaise && baseline.type !== "raise" && baseline.type !== "all-in" && checkRaiseCandidate) {
+      const frequency: Record<BotProfile, number> = { balanced: 0.46, tag: 0.5, lag: 0.62, nit: 0.38, caller: 0.12 };
+      if (mix("check-raise") < frequency[player.profile]) return flopRaiseToFraction(state, seatIndex, analysis.texture.dynamic ? 0.78 : 0.62);
+    }
+
+    // E: repair clear defense errors without turning marginal hands into calls.
+    if (modules.has("defense") && baseline.type === "fold" && (analysis.handClass === "combo-draw" || analysis.handClass === "nut-draw" || vulnerableValue) && betFraction <= 0.85) {
+      return { type: "call" };
+    }
+    if (modules.has("defense") && baseline.type === "call" && analysis.handClass === "air" && !details.draw && details.overcards === 0 && betFraction >= 0.62) {
+      return { type: "fold" };
+    }
+  }
+
+  return baseline;
+}
+
+function decideBotV12FromPublicState(state: HandState, seatIndex: number, random: () => number, modules: ReadonlySet<FlopStrategyModule> = PROMOTED_FLOP_MODULES): PokerAction {
+  const baseline = decideBotV11FromPublicState(state, seatIndex, random);
+  return decideFlopV12(state, seatIndex, baseline, modules);
+}
+
+export function decideBotV12Candidate(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  const publicState = structuredClone(state) as HandState;
+  publicState.players.forEach((player, index) => { if (index !== seatIndex) player.hole = []; });
+  return decideBotV12FromPublicState(publicState, seatIndex, random);
+}
+
+export function decideBotV12Ablation(state: HandState, seatIndex: number, modules: FlopStrategyModule[], random: () => number = Math.random): PokerAction {
+  const publicState = structuredClone(state) as HandState;
+  publicState.players.forEach((player, index) => { if (index !== seatIndex) player.hole = []; });
+  return decideBotV12FromPublicState(publicState, seatIndex, random, new Set(modules));
+}
+
 function evaluationForAction(evaluations: ActionEvaluation[], action: PokerAction) {
   const sameType = evaluations.filter((evaluation) => evaluation.action.type === action.type);
   if (action.type !== "raise") return sameType[0];
@@ -2467,7 +2675,7 @@ function decideBotV9FromPublicState(state: HandState, seatIndex: number, random:
 }
 
 function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  return state.street === "preflop" ? decideBotV9FromPublicState(state, seatIndex, random) : decideBotV11FromPublicState(state, seatIndex, random);
+  return state.street === "preflop" ? decideBotV9FromPublicState(state, seatIndex, random) : decideBotV12FromPublicState(state, seatIndex, random);
 }
 
 export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
@@ -2678,9 +2886,16 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
     ? "Preferred"
     : regret >= costlyThreshold && !intervalsOverlap ? "Costly" : "Viable";
   const features = handFeatures(state.players[humanSeat].hole, state.board);
-  const concept = state.street === "river" && state.currentBet === 0 && features.made === 1 ? "Thin river value"
+  let concept = state.street === "river" && state.currentBet === 0 && features.made === 1 ? "Thin river value"
     : state.currentBet > 0 ? "Price, range and response EV"
       : best.action.type === "raise" || best.action.type === "all-in" ? "Value, folds and bet sizing" : "Checking and equity realization";
+  const flopAnalysis = state.street === "flop" ? analyzeFlopStrategy(state, humanSeat) : null;
+  if (flopAnalysis) {
+    if (state.currentBet > 0) concept = "Flop defense and check-raising";
+    else if (["nuts", "strong-value"].includes(flopAnalysis.handClass) && flopAnalysis.texture.dynamic) concept = "Flop value and protection";
+    else if (flopAnalysis.rangeAdvantage >= 0.35) concept = "Range advantage and flop sizing";
+    else if (flopAnalysis.texture.dynamic) concept = "Dynamic-board caution";
+  }
   let alternatives = evaluations.map((evaluation) => {
     const actionRegret = Math.max(0, best.ev - evaluation.ev);
     const overlap = evaluation.evHigh >= best.evLow;
@@ -2714,6 +2929,15 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const thinValueNote = concept === "Thin river value"
     ? "The comparison discounts missed draws that improve showdown equity but usually fold. A river bet needs enough worse hands in the calling range, not merely a high chance of being ahead before betting."
     : "The estimate compares legal actions using likely folds, the range that continues, future-card equity, position, stack depth and rake. Overlapping ranges indicate a genuinely close decision.";
+  const flopTextureNote = flopAnalysis
+    ? ` This is a ${flopAnalysis.texture.stability} ${flopAnalysis.texture.tone} ${flopAnalysis.texture.band} flop. ${flopAnalysis.rangeAdvantage >= 0.35
+      ? "Your modeled range has the advantage: it contains more strong hands overall, which can support frequent small bets."
+      : flopAnalysis.rangeAdvantage <= 0.12
+        ? "The caller can hold more of the strongest two-pair, set, and draw combinations, so checking more often protects your checking range."
+        : "Neither range has a decisive structural advantage, so hand class and position carry more weight."} ${flopAnalysis.texture.dynamic
+      ? "Many turns change the best hand or complete draws, so strong made hands gain protection from betting and weak hands should bluff selectively."
+      : "Few turn cards radically change the board, so small bets and slow plays are more defensible."}`
+    : "";
   return {
     ...baseline,
     grade,
@@ -2721,11 +2945,15 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
     concept,
     takeaway: concept === "Thin river value"
       ? "Judge a river value bet against the opponent's calling range. Hands that fold do not pay you simply because you were ahead of them."
+      : flopAnalysis && state.currentBet === 0
+        ? "Bet for value when worse hands can call, for protection when free cards matter, or as a bluff when better hands can fold. Let range advantage and board texture guide the size and frequency."
+        : flopAnalysis
+          ? "Compare the price with your equity against the bettor's range; raise a polarized range of strong value and robust draws rather than every hand that can continue."
       : "Compare actions by expected value, then treat small differences as mixes rather than absolute rules.",
     alternatives,
-    note: thinValueNote,
+    note: thinValueNote + flopTextureNote,
     confidence,
-    basis: `${evaluations.length} legal actions · persistent public-action ranges · ${reviewIterations} bounded multi-street rollouts · EV intervals include model uncertainty`,
+    basis: `${evaluations.length} legal actions · persistent public-action ranges · ${reviewIterations} bounded multi-street rollouts${flopAnalysis ? " · flop texture, range advantage and representative turn branches" : ""} · EV intervals include model uncertainty`,
     estimatedRegret: Math.round(regret * 10) / 10,
     recommendedSize: best.action.type === "raise" && best.action.amount !== undefined ? sizeBand(best.action.amount, legalBounds(state, humanSeat)) : undefined,
   };

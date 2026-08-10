@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   applyAction,
   analyzeBoard,
+  analyzeFlopStrategy,
+  analyzeFlopTexture,
   analyzePreflopSpot,
   buildBotContext,
   buildRangeLedger,
@@ -15,6 +17,9 @@ import {
   decideBotV10,
   decideBotV10Candidate,
   decideBotV11Candidate,
+  decideBotV11,
+  decideBotV12Candidate,
+  decideBotV12Ablation,
   decideBotLegacy,
   decideBotV6,
   estimateRangeEquity,
@@ -82,6 +87,34 @@ test("strategic hand and board classes distinguish value, draws, and dynamic tex
   const profile = analyzeBoard([card("9", "hearts"), card("T", "hearts"), card("J", "hearts"), card("Q", "clubs")]);
   assert.equal(profile.fourStraight, true);
   assert.equal(profile.dynamic, true);
+});
+
+test("flop taxonomy separates static high boards from dynamic connected boards and normalizes turn branches", () => {
+  const staticBoard = analyzeFlopTexture([card("A", "spades"), card("7", "clubs"), card("2", "diamonds")]);
+  const dynamicBoard = analyzeFlopTexture([card("J", "hearts"), card("T", "hearts"), card("8", "clubs")]);
+  assert.equal(staticBoard.band, "ace-high");
+  assert.equal(staticBoard.stability, "static");
+  assert.equal(dynamicBoard.stability, "dynamic");
+  assert.ok(dynamicBoard.connectedness > staticBoard.connectedness);
+
+  const state = createSession(seededRandom(1701));
+  const actor = state.players.findIndex((player) => player.position === "BTN");
+  const opponent = state.players.findIndex((player) => player.position === "BB");
+  state.street = "flop";
+  state.board = [card("A", "spades"), card("7", "clubs"), card("2", "diamonds")];
+  state.players.forEach((player, index) => { player.folded = index !== actor && index !== opponent; });
+  state.players[actor].hole = [card("K", "spades"), card("Q", "spades")];
+  state.preflopAggressor = actor;
+  state.lastAggressor = actor;
+  state.preflopRaises = 1;
+  const analysis = analyzeFlopStrategy(state, actor)!;
+  assert.ok(analysis.rangeAdvantage > 0);
+  assert.ok(Math.abs(Object.values(analysis.turnBuckets).reduce((sum, value) => sum + value, 0) - 1) < 1e-9);
+  const relabeled = analyzeFlopTexture([card("A", "clubs"), card("7", "diamonds"), card("2", "hearts")]);
+  assert.deepEqual(
+    { band: relabeled.band, connectedness: relabeled.connectedness, tone: relabeled.tone, stability: relabeled.stability },
+    { band: staticBoard.band, connectedness: staticBoard.connectedness, tone: staticBoard.tone, stability: staticBoard.stability },
+  );
 });
 
 test("published preflop charts expose the coach's exact positional ranges", () => {
@@ -1006,6 +1039,124 @@ test("v11 selectively restores first-to-act turn value and remains the live poli
   const deep = firstToActTurnTwoPairSpot();
   deep.players.filter((player) => !player.folded).forEach((player) => { player.stack = 382; });
   assert.deepEqual(decideBotV11Candidate(deep, humanSeat, seededRandom(11)), decideBotV10(deep, humanSeat, seededRandom(11)));
+});
+
+function headsUpFlopSpot(board: Card[], hole: Card[], actorPosition: Position = "BTN") {
+  const state = createSession(seededRandom(1702));
+  const actor = humanSeat;
+  const opponent = 0;
+  state.street = "flop";
+  state.board = board;
+  state.currentActor = actor;
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.players.forEach((player, index) => {
+    player.folded = index !== actor && index !== opponent;
+    player.streetBet = 0;
+    player.committed = index === actor || index === opponent ? 6 : 0;
+    player.stack = index === actor || index === opponent ? 194 : player.stack;
+  });
+  state.players[actor].position = actorPosition;
+  state.players[actor].hole = hole;
+  state.players[actor].profile = "balanced";
+  state.players[opponent].position = actorPosition === "BTN" ? "BB" : "BTN";
+  state.preflopAggressor = actor;
+  state.lastAggressor = actor;
+  state.preflopRaises = 1;
+  state.actionLog = [
+    { street: "preflop", seat: actor, type: "raise", amount: 6, toCallBefore: 2, raiseLevel: 0, potBefore: 3 },
+    { street: "preflop", seat: opponent, type: "call", amount: 6, toCallBefore: 4, raiseLevel: 1, potBefore: 9 },
+  ];
+  if (actorPosition === "BTN") state.actionLog.push({ street: "flop", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0, potBefore: 12 });
+  return state;
+}
+
+test("v12 flop policy adds value/protection and texture-aware range betting without becoming deterministic", () => {
+  let valueCorrections = 0;
+  let dryRangeBets = 0;
+  let wetAirChecks = 0;
+  for (let hand = 1; hand <= 80; hand += 1) {
+    const value = headsUpFlopSpot(
+      [card("J", "hearts"), card("T", "hearts"), card("4", "clubs")],
+      [card("J", "spades"), card("T", "clubs")],
+    );
+    value.handNumber = hand;
+    const predecessor = decideBotV11(value, humanSeat, seededRandom(hand));
+    const candidate = decideBotV12Candidate(value, humanSeat, seededRandom(hand));
+    assert.equal(validateAction(value, humanSeat, candidate).legal, true);
+    if (predecessor.type === "check" && ["raise", "all-in"].includes(candidate.type)) valueCorrections += 1;
+
+    const dry = headsUpFlopSpot(
+      [card("A", "hearts"), card("7", "clubs"), card("2", "diamonds")],
+      [card("K", "spades"), card("Q", "spades")],
+    );
+    dry.handNumber = hand;
+    const dryPredecessor = decideBotV11(dry, humanSeat, seededRandom(hand));
+    const dryCandidate = decideBotV12Candidate(dry, humanSeat, seededRandom(hand));
+    if (dryPredecessor.type === "check" && ["raise", "all-in"].includes(dryCandidate.type)) dryRangeBets += 1;
+
+    const wet = headsUpFlopSpot(
+      [card("T", "hearts"), card("8", "hearts"), card("5", "clubs")],
+      [card("A", "spades"), card("K", "clubs")],
+    );
+    wet.players[humanSeat].profile = "lag";
+    wet.handNumber = hand;
+    const wetPredecessor = decideBotV11(wet, humanSeat, seededRandom(hand));
+    const wetCandidate = decideBotV12Ablation(wet, humanSeat, ["cbet-suppression"], seededRandom(hand));
+    if (["raise", "all-in"].includes(wetPredecessor.type) && wetCandidate.type === "check") wetAirChecks += 1;
+  }
+  assert.ok(valueCorrections > 0 && valueCorrections < 80, `value corrections ${valueCorrections}`);
+  assert.ok(dryRangeBets > 0 && dryRangeBets < 80, `dry range bets ${dryRangeBets}`);
+  assert.ok(wetAirChecks > 0, `wet air checks ${wetAirChecks}`);
+});
+
+test("v12 flop policy preserves hidden-card invariance, legal actions, and exact deep/multiway fallback", () => {
+  const state = headsUpFlopSpot(
+    [card("Q", "hearts"), card("8", "hearts"), card("5", "clubs")],
+    [card("A", "hearts"), card("Q", "clubs")],
+  );
+  const altered = structuredClone(state);
+  altered.players[0].hole = [card("Q", "diamonds"), card("Q", "spades")];
+  assert.deepEqual(decideBotV12Candidate(state, humanSeat, seededRandom(1703)), decideBotV12Candidate(altered, humanSeat, seededRandom(1703)));
+  for (let seed = 1; seed <= 100; seed += 1) {
+    const action = decideBotV12Candidate(state, humanSeat, seededRandom(seed));
+    assert.equal(validateAction(state, humanSeat, action).legal, true);
+  }
+  const deep = structuredClone(state);
+  deep.players.filter((player) => !player.folded).forEach((player) => { player.stack = 394; player.committed = 6; });
+  assert.deepEqual(decideBotV12Candidate(deep, humanSeat, seededRandom(1704)), decideBotV11(deep, humanSeat, seededRandom(1704)));
+  const multiway = structuredClone(state);
+  multiway.players[1].folded = false;
+  assert.deepEqual(decideBotV12Candidate(multiway, humanSeat, seededRandom(1705)), decideBotV11(multiway, humanSeat, seededRandom(1705)));
+});
+
+test("v12 flop decisions stay within the interactive performance budget", () => {
+  const durations: number[] = [];
+  for (let seed = 1; seed <= 80; seed += 1) {
+    const state = headsUpFlopSpot(
+      [card("J", "hearts"), card("9", "clubs"), card("7", "hearts")],
+      [card("A", "spades"), card("J", "clubs")],
+    );
+    state.handNumber = seed;
+    const started = performance.now();
+    decideBotV12Candidate(state, humanSeat, seededRandom(seed));
+    durations.push(performance.now() - started);
+  }
+  durations.sort((a, b) => a - b);
+  assert.ok(durations[Math.floor(durations.length * 0.5)] < 150, `median ${durations[40]}ms`);
+  assert.ok(durations[Math.floor(durations.length * 0.95)] < 300, `p95 ${durations[76]}ms`);
+});
+
+test("flop coaching explains texture and range structure in beginner-facing language", () => {
+  const state = headsUpFlopSpot(
+    [card("A", "hearts"), card("7", "clubs"), card("2", "diamonds")],
+    [card("K", "spades"), card("Q", "spades")],
+  );
+  const review = applyAction(state, humanSeat, { type: "check" }).reviews[0];
+  assert.match(review.note, /static rainbow ace-high flop/);
+  assert.match(review.note, /modeled range has the advantage/);
+  assert.match(review.takeaway, /Bet for value when worse hands can call/);
+  assert.match(review.basis!, /representative turn branches/);
 });
 
 test("postflop coaching is deterministic and never uses an opponent's hidden cards", () => {

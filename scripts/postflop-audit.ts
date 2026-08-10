@@ -2,8 +2,9 @@ import {
   applyAction,
   buildBotContext,
   createSession,
-  decideBotV10,
-  decideBotV11Candidate,
+  analyzeFlopTexture,
+  decideBotV11,
+  decideBotV12Candidate,
   seededRandom,
   toCallFor,
   type BotProfile,
@@ -11,12 +12,12 @@ import {
   type Street,
 } from "../app/poker-engine";
 
-type Policy = (state: HandState, seat: number, random: () => number) => ReturnType<typeof decideBotV10>;
+type Policy = (state: HandState, seat: number, random: () => number) => ReturnType<typeof decideBotV11>;
 type StreetMetrics = { actions: number; aggressive: number; facing: number; folds: number; sizeTotal: number; sizes: number };
-type Metrics = Record<Street, StreetMetrics> & { cbetOpps: number; cbets: number; barrelOpps: number; barrels: number; checkRaises: number };
+type Metrics = Record<Street, StreetMetrics> & { cbetOpps: number; cbets: number; dryHighCbetOpps: number; dryHighCbets: number; wetLowCbetOpps: number; wetLowCbets: number; barrelOpps: number; barrels: number; checkRaises: number };
 const profiles: BotProfile[] = ["balanced", "tag", "lag", "nit", "caller", "balanced"];
 const emptyStreet = (): StreetMetrics => ({ actions: 0, aggressive: 0, facing: 0, folds: 0, sizeTotal: 0, sizes: 0 });
-const emptyMetrics = (): Metrics => ({ preflop: emptyStreet(), flop: emptyStreet(), turn: emptyStreet(), river: emptyStreet(), cbetOpps: 0, cbets: 0, barrelOpps: 0, barrels: 0, checkRaises: 0 });
+const emptyMetrics = (): Metrics => ({ preflop: emptyStreet(), flop: emptyStreet(), turn: emptyStreet(), river: emptyStreet(), cbetOpps: 0, cbets: 0, dryHighCbetOpps: 0, dryHighCbets: 0, wetLowCbetOpps: 0, wetLowCbets: 0, barrelOpps: 0, barrels: 0, checkRaises: 0 });
 
 function run(policy: Policy, hands: number, seed: number) {
   const metrics = emptyMetrics();
@@ -49,6 +50,15 @@ function run(policy: Policy, hands: number, seed: number) {
         if (state.street === "flop" && actor === state.preflopAggressor && !previousAggression && toCallFor(state, actor) === 0) {
           metrics.cbetOpps += 1;
           if (aggressive) metrics.cbets += 1;
+          const texture = analyzeFlopTexture(state.board);
+          if ((texture.band === "ace-high" || texture.band === "king-high") && texture.stability === "static") {
+            metrics.dryHighCbetOpps += 1;
+            if (aggressive) metrics.dryHighCbets += 1;
+          }
+          if ((texture.band === "middle" || texture.band === "low") && texture.stability === "dynamic") {
+            metrics.wetLowCbetOpps += 1;
+            if (aggressive) metrics.wetLowCbets += 1;
+          }
         }
         if ((state.street === "turn" || state.street === "river") && actor === state.preflopAggressor && !previousAggression && toCallFor(state, actor) === 0) {
           const priorStreet = state.street === "turn" ? "flop" : "turn";
@@ -75,11 +85,13 @@ const summarize = (metrics: Metrics) => ({
     averageBetPot: metrics[street].sizes ? metrics[street].sizeTotal / metrics[street].sizes : 0,
   }])),
   cbet: metrics.cbetOpps ? metrics.cbets / metrics.cbetOpps : 0,
+  dryHighCbet: metrics.dryHighCbetOpps ? metrics.dryHighCbets / metrics.dryHighCbetOpps : 0,
+  wetLowCbet: metrics.wetLowCbetOpps ? metrics.wetLowCbets / metrics.wetLowCbetOpps : 0,
   laterBarrel: metrics.barrelOpps ? metrics.barrels / metrics.barrelOpps : 0,
   checkRaiseCount: metrics.checkRaises,
 });
-const baseline = summarize(run(decideBotV10, hands, 1401));
-const candidate = summarize(run(decideBotV11Candidate, hands, 1401));
+const baseline = summarize(run(decideBotV11, hands, 1401));
+const candidate = summarize(run(decideBotV12Candidate, hands, 1401));
 console.log(JSON.stringify({ hands, baseline, candidate }, null, 2));
 if (process.argv.includes("--strict")) {
   const streets = Object.values(candidate.streets);
@@ -87,4 +99,5 @@ if (process.argv.includes("--strict")) {
     throw new Error(`Postflop population gate failed: ${JSON.stringify(candidate)}`);
   }
   if (candidate.cbet < 0.2 || candidate.cbet > 0.82 || candidate.laterBarrel > 0.78) throw new Error(`Line-frequency gate failed: ${JSON.stringify(candidate)}`);
+  if (candidate.dryHighCbet && candidate.wetLowCbet && candidate.dryHighCbet <= candidate.wetLowCbet) throw new Error(`Texture c-bet ordering failed: ${JSON.stringify(candidate)}`);
 }
