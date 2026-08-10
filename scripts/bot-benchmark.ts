@@ -1,7 +1,7 @@
 import {
   applyAction,
   createSession,
-  decideBot,
+  decideBotV10Candidate,
   decideBotV8,
   potTotal,
   seededRandom,
@@ -95,7 +95,7 @@ const requestedStackBb = Number(process.argv.find((argument) => argument.startsW
 const startingStack = (Number.isFinite(requestedStackBb) ? requestedStackBb : 100) * 2;
 const mixedOnly = process.argv.includes("--mixed-only");
 const strict = process.argv.includes("--strict");
-const liveCandidate = decideBot;
+const liveCandidate = decideBotV10Candidate;
 const profileDeals = Number.isFinite(requestedDeals) ? requestedDeals : quick ? 80 : 400;
 const mixedDeals = Number.isFinite(requestedDeals) ? requestedDeals : quick ? 180 : 1200;
 const identity = summarize("mixed", Math.min(120, mixedDeals), 90_000, startingStack, decideBotV8);

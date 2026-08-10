@@ -2,19 +2,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyAction,
+  analyzeBoard,
   analyzePreflopSpot,
   buildBotContext,
+  buildRangeLedger,
   cardLabel,
   CLOCKWISE_SEATS,
   createSession,
   decideBot,
   decideBotCandidate,
   decideBotV8,
+  decideBotV10Candidate,
   decideBotLegacy,
   decideBotV6,
   estimateRangeEquity,
   estimateRangeEquityV6,
   evaluatePostflopActions,
+  evaluatePostflopActionsV10,
   evaluateHand,
   humanSeat,
   legalBounds,
@@ -25,6 +29,7 @@ import {
   shuffledDeck,
   startHand,
   startingHandKey,
+  classifyStrategicHand,
   toCallFor,
   validateAction,
   type BotProfile,
@@ -66,6 +71,15 @@ test("two sets correctly make a full house using the lower set as the pair", () 
   ]);
   assert.equal(result.name, "Full house");
   assert.deepEqual(result.score, [6, 14, 13]);
+});
+
+test("strategic hand and board classes distinguish value, draws, and dynamic textures", () => {
+  assert.equal(classifyStrategicHand([card("A", "spades"), card("K", "spades")], [card("Q", "spades"), card("J", "spades"), card("T", "spades")]), "nuts");
+  assert.equal(classifyStrategicHand([card("A", "hearts"), card("K", "hearts")], [card("Q", "hearts"), card("J", "spades"), card("2", "hearts")]), "combo-draw");
+  assert.equal(classifyStrategicHand([card("Q", "clubs"), card("J", "diamonds")], [card("Q", "hearts"), card("J", "clubs"), card("4", "spades")]), "strong-value");
+  const profile = analyzeBoard([card("9", "hearts"), card("T", "hearts"), card("J", "hearts"), card("Q", "clubs")]);
+  assert.equal(profile.fourStraight, true);
+  assert.equal(profile.dynamic, true);
 });
 
 test("published preflop charts expose the coach's exact positional ranges", () => {
@@ -884,6 +898,61 @@ function postflopCoachingSpot() {
   return state;
 }
 
+function checkedToRiverTwoPairSpot() {
+  const state = createSession(seededRandom(1303));
+  const opponent = 0;
+  state.street = "river";
+  state.board = [card("Q", "clubs"), card("J", "diamonds"), card("7", "spades"), card("4", "hearts"), card("2", "clubs")];
+  state.players.forEach((player, index) => { player.folded = index !== humanSeat && index !== opponent; });
+  state.players[humanSeat].hole = [card("Q", "hearts"), card("J", "clubs")];
+  state.players[humanSeat].position = "BTN";
+  state.players[humanSeat].profile = "caller";
+  state.players[humanSeat].stack = 176;
+  state.players[humanSeat].committed = 24;
+  state.players[humanSeat].streetBet = 0;
+  state.players[opponent].position = "BB";
+  state.players[opponent].stack = 176;
+  state.players[opponent].committed = 24;
+  state.players[opponent].streetBet = 0;
+  state.players[opponent].acted = true;
+  state.currentActor = humanSeat;
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.actionLog = [
+    { street: "preflop", seat: humanSeat, type: "raise", amount: 5, toCallBefore: 2, raiseLevel: 0 },
+    { street: "preflop", seat: opponent, type: "call", amount: 5, toCallBefore: 3, raiseLevel: 1 },
+    { street: "flop", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0 },
+    { street: "flop", seat: humanSeat, type: "raise", amount: 7, toCallBefore: 0, raiseLevel: 0, potBefore: 10 },
+    { street: "flop", seat: opponent, type: "call", amount: 7, toCallBefore: 7, raiseLevel: 1, potBefore: 17 },
+    { street: "turn", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0 },
+    { street: "turn", seat: humanSeat, type: "raise", amount: 12, toCallBefore: 0, raiseLevel: 0, potBefore: 24 },
+    { street: "turn", seat: opponent, type: "call", amount: 12, toCallBefore: 12, raiseLevel: 1, potBefore: 36 },
+    { street: "river", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0, potBefore: 48 },
+  ];
+  return state;
+}
+
+test("v10 repairs missed heads-up river value without forcing every passive profile to bet", () => {
+  let predecessorChecks = 0;
+  let corrections = 0;
+  for (let seed = 1; seed <= 20; seed += 1) {
+    const state = checkedToRiverTwoPairSpot();
+    state.handNumber = seed;
+    const predecessor = decideBotV8(state, humanSeat, seededRandom(seed));
+    const candidate = decideBotV10Candidate(state, humanSeat, seededRandom(seed));
+    const live = decideBot(state, humanSeat, seededRandom(seed));
+    assert.equal(validateAction(state, humanSeat, candidate).legal, true);
+    assert.deepEqual(live, candidate);
+    if (predecessor.type === "check") predecessorChecks += 1;
+    if (predecessor.type === "check" && (candidate.type === "raise" || candidate.type === "all-in")) corrections += 1;
+  }
+  assert.ok(predecessorChecks > 0);
+  assert.ok(corrections > 0 && corrections < predecessorChecks, `checks ${predecessorChecks}, corrections ${corrections}`);
+  const deep = checkedToRiverTwoPairSpot();
+  deep.players.filter((player) => !player.folded).forEach((player) => { player.stack = 376; });
+  assert.deepEqual(decideBotV10Candidate(deep, humanSeat, seededRandom(9)), decideBotV8(deep, humanSeat, seededRandom(9)));
+});
+
 test("postflop coaching is deterministic and never uses an opponent's hidden cards", () => {
   const first = postflopCoachingSpot();
   const second = postflopCoachingSpot();
@@ -893,7 +962,7 @@ test("postflop coaching is deterministic and never uses an opponent's hidden car
   assert.equal(firstReview.equity, secondReview.equity);
   assert.equal(firstReview.grade, secondReview.grade);
   assert.ok((firstReview.equityHigh ?? 0) > (firstReview.equityLow ?? 1));
-  assert.match(firstReview.basis!, /repeatable range-weighted rollouts/);
+  assert.match(firstReview.basis!, /persistent public-action ranges/);
 });
 
 test("postflop action EV is deterministic, legal, and hidden-card invariant", () => {
@@ -906,6 +975,31 @@ test("postflop action EV is deterministic, legal, and hidden-card invariant", ()
   assert.ok(firstEvaluations.length >= 3);
   firstEvaluations.forEach((evaluation) => assert.equal(validateAction(first, humanSeat, evaluation.action).legal, true));
   assert.ok(firstEvaluations.every((evaluation) => evaluation.evLow <= evaluation.ev && evaluation.ev <= evaluation.evHigh));
+});
+
+test("v10 range ledger is normalized, card-aware, and hidden-card invariant", () => {
+  const first = postflopCoachingSpot();
+  const second = postflopCoachingSpot();
+  second.players[0].hole = [card("2", "diamonds"), card("3", "diamonds")];
+  const firstLedger = buildRangeLedger(first, humanSeat);
+  const secondLedger = buildRangeLedger(second, humanSeat);
+  assert.deepEqual(firstLedger, secondLedger);
+  const combos = firstLedger[0];
+  assert.ok(combos.length >= 250);
+  assert.ok(Math.abs(combos.reduce((sum, combo) => sum + combo.weight, 0) - 1) < 1e-9);
+  const known = new Set([...first.players[humanSeat].hole, ...first.board].map(cardLabel));
+  assert.equal(combos.some((combo) => combo.cards.some((candidate) => known.has(cardLabel(candidate)))), false);
+});
+
+test("v10 bounded search is deterministic, legal, and does not inspect hidden cards", () => {
+  const first = postflopCoachingSpot();
+  const second = postflopCoachingSpot();
+  second.players[0].hole = [card("2", "diamonds"), card("3", "diamonds")];
+  const firstEvaluation = evaluatePostflopActionsV10(first, humanSeat, 24, seededRandom(1301));
+  const secondEvaluation = evaluatePostflopActionsV10(second, humanSeat, 24, seededRandom(1301));
+  assert.deepEqual(firstEvaluation, secondEvaluation);
+  firstEvaluation.forEach((evaluation) => assert.equal(validateAction(first, humanSeat, evaluation.action).legal, true));
+  assert.deepEqual(decideBotV10Candidate(first, humanSeat, seededRandom(1302)), decideBotV10Candidate(second, humanSeat, seededRandom(1302)));
 });
 
 test("river coaching does not confuse equity versus all hands with value versus a calling range", () => {
