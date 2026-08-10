@@ -1,8 +1,8 @@
 import {
   applyAction,
   createSession,
-  decideBotV10Candidate,
-  decideBotV8,
+  decideBotV10,
+  decideBotV11Candidate,
   potTotal,
   seededRandom,
   type BotProfile,
@@ -10,7 +10,7 @@ import {
 } from "../app/poker-engine";
 
 type Result = { candidateProfit: number; predecessorProfit: number; decisions: number; deltas: Record<string, number> };
-type Policy = (state: HandState, seat: number, random: () => number) => ReturnType<typeof decideBotV8>;
+type Policy = (state: HandState, seat: number, random: () => number) => ReturnType<typeof decideBotV10>;
 const profiles: BotProfile[] = ["balanced", "tag", "lag", "nit", "caller", "balanced"];
 
 function decisionSeed(seed: number, seat: number, decision: number) {
@@ -33,9 +33,9 @@ function runHand(seed: number, upgraded: Set<number>, profile: BotProfile | "mix
     const seedForDecision = decisionSeed(seed, actor, seatDecisions[actor]++);
     const action = upgraded.has(actor)
       ? candidate(state, actor, seededRandom(seedForDecision))
-      : decideBotV8(state, actor, seededRandom(seedForDecision));
+      : decideBotV10(state, actor, seededRandom(seedForDecision));
     if (upgraded.has(actor)) {
-      const predecessor = decideBotV8(state, actor, seededRandom(seedForDecision));
+      const predecessor = decideBotV10(state, actor, seededRandom(seedForDecision));
       if (predecessor.type !== action.type || predecessor.amount !== action.amount) {
         const key = `${state.players[actor].profile}:${state.street}:r${state.raiseCount}:${predecessor.type}>${action.type}`;
         deltas[key] = (deltas[key] ?? 0) + 1;
@@ -95,10 +95,10 @@ const requestedStackBb = Number(process.argv.find((argument) => argument.startsW
 const startingStack = (Number.isFinite(requestedStackBb) ? requestedStackBb : 100) * 2;
 const mixedOnly = process.argv.includes("--mixed-only");
 const strict = process.argv.includes("--strict");
-const liveCandidate = decideBotV10Candidate;
+const liveCandidate = decideBotV11Candidate;
 const profileDeals = Number.isFinite(requestedDeals) ? requestedDeals : quick ? 80 : 400;
 const mixedDeals = Number.isFinite(requestedDeals) ? requestedDeals : quick ? 180 : 1200;
-const identity = summarize("mixed", Math.min(120, mixedDeals), 90_000, startingStack, decideBotV8);
+const identity = summarize("mixed", Math.min(120, mixedDeals), 90_000, startingStack, decideBotV10);
 if (identity.bbPer100 !== 0 || identity.ci95[0] !== 0 || identity.ci95[1] !== 0) {
   throw new Error(`Identity benchmark must equal zero: ${JSON.stringify(identity)}`);
 }
@@ -109,7 +109,7 @@ const results = mixedOnly
       ...(["balanced", "tag", "lag", "nit", "caller"] as BotProfile[]).map((profile, index) => summarize(profile, profileDeals, 200_000 + index * 10_000, startingStack, liveCandidate)),
     ];
 
-console.log(JSON.stringify({ benchmark: "paired duplicate deals; candidate and frozen V8 seats swapped; per-seat deterministic decision streams", identity, results }, null, 2));
+console.log(JSON.stringify({ benchmark: "paired duplicate deals; candidate and frozen V10 seats swapped; per-seat deterministic decision streams", identity, results }, null, 2));
 if (strict) {
   const regressions = results.filter((result) => result.ci95[0] < 0);
   if (regressions.length) throw new Error(`Strict additive gate failed: ${JSON.stringify(regressions)}`);

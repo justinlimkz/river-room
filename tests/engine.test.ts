@@ -12,7 +12,9 @@ import {
   decideBot,
   decideBotCandidate,
   decideBotV8,
+  decideBotV10,
   decideBotV10Candidate,
+  decideBotV11Candidate,
   decideBotLegacy,
   decideBotV6,
   estimateRangeEquity,
@@ -951,6 +953,59 @@ test("v10 repairs missed heads-up river value without forcing every passive prof
   const deep = checkedToRiverTwoPairSpot();
   deep.players.filter((player) => !player.folded).forEach((player) => { player.stack = 376; });
   assert.deepEqual(decideBotV10Candidate(deep, humanSeat, seededRandom(9)), decideBotV8(deep, humanSeat, seededRandom(9)));
+});
+
+function firstToActTurnTwoPairSpot() {
+  const state = createSession(seededRandom(1501));
+  const opponent = 0;
+  state.street = "turn";
+  state.board = [card("Q", "clubs"), card("J", "diamonds"), card("7", "spades"), card("4", "hearts")];
+  state.players.forEach((player, index) => { player.folded = index !== humanSeat && index !== opponent; });
+  state.players[humanSeat].hole = [card("Q", "hearts"), card("J", "clubs")];
+  state.players[humanSeat].position = "BB";
+  state.players[humanSeat].profile = "caller";
+  state.players[humanSeat].stack = 182;
+  state.players[humanSeat].committed = 18;
+  state.players[humanSeat].streetBet = 0;
+  state.players[opponent].position = "BTN";
+  state.players[opponent].stack = 182;
+  state.players[opponent].committed = 18;
+  state.players[opponent].streetBet = 0;
+  state.players[opponent].acted = false;
+  state.currentActor = humanSeat;
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.preflopAggressor = opponent;
+  state.lastAggressor = opponent;
+  state.actionLog = [
+    { street: "preflop", seat: opponent, type: "raise", amount: 5, toCallBefore: 2, raiseLevel: 0, potBefore: 3 },
+    { street: "preflop", seat: humanSeat, type: "call", amount: 5, toCallBefore: 3, raiseLevel: 1, potBefore: 8 },
+    { street: "flop", seat: humanSeat, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0, potBefore: 10 },
+    { street: "flop", seat: opponent, type: "raise", amount: 8, toCallBefore: 0, raiseLevel: 0, potBefore: 10 },
+    { street: "flop", seat: humanSeat, type: "call", amount: 8, toCallBefore: 8, raiseLevel: 1, potBefore: 18 },
+  ];
+  return state;
+}
+
+test("v11 selectively restores first-to-act turn value and remains the live policy", () => {
+  let predecessorChecks = 0;
+  let corrections = 0;
+  for (let seed = 1; seed <= 18; seed += 1) {
+    const state = firstToActTurnTwoPairSpot();
+    state.handNumber = seed;
+    const predecessor = decideBotV10(state, humanSeat, seededRandom(seed));
+    const candidate = decideBotV11Candidate(state, humanSeat, seededRandom(seed));
+    const live = decideBot(state, humanSeat, seededRandom(seed));
+    assert.equal(validateAction(state, humanSeat, candidate).legal, true);
+    assert.deepEqual(live, candidate);
+    if (predecessor.type === "check") predecessorChecks += 1;
+    if (predecessor.type === "check" && (candidate.type === "raise" || candidate.type === "all-in")) corrections += 1;
+  }
+  assert.ok(predecessorChecks > 0);
+  assert.ok(corrections > 0 && corrections < predecessorChecks, `checks ${predecessorChecks}, corrections ${corrections}`);
+  const deep = firstToActTurnTwoPairSpot();
+  deep.players.filter((player) => !player.folded).forEach((player) => { player.stack = 382; });
+  assert.deepEqual(decideBotV11Candidate(deep, humanSeat, seededRandom(11)), decideBotV10(deep, humanSeat, seededRandom(11)));
 });
 
 test("postflop coaching is deterministic and never uses an opponent's hidden cards", () => {

@@ -2386,6 +2386,55 @@ export function decideBotV10Candidate(state: HandState, seatIndex: number, rando
   return decideBotV10FromPublicState(publicState, seatIndex, random);
 }
 
+// Frozen production policy from Site version 21. Turn candidates are compared
+// against this exact boundary so the promoted river gain cannot drift.
+export function decideBotV10(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  return decideBotV10Candidate(state, seatIndex, random);
+}
+
+function decideTurnV11(state: HandState, seatIndex: number, baseline: PokerAction, random: () => number): PokerAction {
+  if (state.street !== "turn") return baseline;
+  const context = buildBotContext(state, seatIndex);
+  if (context.activePlayers !== 2) return baseline;
+  const effectiveStartingStack = Math.min(
+    state.players[seatIndex].stack + state.players[seatIndex].committed,
+    ...context.opponents.map((opponent) => state.players[opponent].stack + state.players[opponent].committed),
+  );
+  if (effectiveStartingStack > 300) return baseline;
+  const bounds = legalBounds(state, seatIndex);
+  const handClass = classifyStrategicHand(state.players[seatIndex].hole, state.board);
+  const pot = potTotal(state);
+
+  // Ablation A: recover high-confidence value that the threshold policy checks.
+  if (baseline.type === "check" && bounds.toCall === 0 && (handClass === "nuts" || handClass === "strong-value")) {
+    const evaluations = evaluatePostflopActionsV10(state, seatIndex, 28, random);
+    const check = evaluations.find((evaluation) => evaluation.action.type === "check");
+    const valueBet = evaluations.find((evaluation) => {
+      if (evaluation.action.type !== "raise" && evaluation.action.type !== "all-in") return false;
+      const target = evaluation.action.type === "all-in" ? bounds.max : evaluation.action.amount ?? 0;
+      const fraction = Math.max(0, target - state.players[seatIndex].streetBet) / Math.max(1, pot);
+      return (evaluation.equityWhenCalled ?? 0) >= 0.62 && (fraction <= 0.8 || context.spr <= 0.7);
+    });
+    if (check && valueBet && valueBet.evLow > check.evHigh + Math.max(1, pot * 0.025)) {
+      const frequency: Record<BotProfile, number> = { balanced: 0.94, tag: 0.92, lag: 0.96, nit: 0.8, caller: 0.84 };
+      if (stableDecisionMix(state, seatIndex, "v11-turn-value") < frequency[state.players[seatIndex].profile]) return valueBet.action;
+    }
+  }
+
+  return baseline;
+}
+
+function decideBotV11FromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  const baseline = decideBotV10FromPublicState(state, seatIndex, random);
+  return decideTurnV11(state, seatIndex, baseline, random);
+}
+
+export function decideBotV11Candidate(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  const publicState = structuredClone(state) as HandState;
+  publicState.players.forEach((player, index) => { if (index !== seatIndex) player.hole = []; });
+  return decideBotV11FromPublicState(publicState, seatIndex, random);
+}
+
 function evaluationForAction(evaluations: ActionEvaluation[], action: PokerAction) {
   const sameType = evaluations.filter((evaluation) => evaluation.action.type === action.type);
   if (action.type !== "raise") return sameType[0];
@@ -2418,7 +2467,7 @@ function decideBotV9FromPublicState(state: HandState, seatIndex: number, random:
 }
 
 function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
-  return state.street === "preflop" ? decideBotV9FromPublicState(state, seatIndex, random) : decideBotV10FromPublicState(state, seatIndex, random);
+  return state.street === "preflop" ? decideBotV9FromPublicState(state, seatIndex, random) : decideBotV11FromPublicState(state, seatIndex, random);
 }
 
 export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {

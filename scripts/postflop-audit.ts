@@ -2,8 +2,8 @@ import {
   applyAction,
   buildBotContext,
   createSession,
-  decideBotV8,
-  decideBotV10Candidate,
+  decideBotV10,
+  decideBotV11Candidate,
   seededRandom,
   toCallFor,
   type BotProfile,
@@ -11,7 +11,7 @@ import {
   type Street,
 } from "../app/poker-engine";
 
-type Policy = (state: HandState, seat: number, random: () => number) => ReturnType<typeof decideBotV8>;
+type Policy = (state: HandState, seat: number, random: () => number) => ReturnType<typeof decideBotV10>;
 type StreetMetrics = { actions: number; aggressive: number; facing: number; folds: number; sizeTotal: number; sizes: number };
 type Metrics = Record<Street, StreetMetrics> & { cbetOpps: number; cbets: number; barrelOpps: number; barrels: number; checkRaises: number };
 const profiles: BotProfile[] = ["balanced", "tag", "lag", "nit", "caller", "balanced"];
@@ -78,8 +78,8 @@ const summarize = (metrics: Metrics) => ({
   laterBarrel: metrics.barrelOpps ? metrics.barrels / metrics.barrelOpps : 0,
   checkRaiseCount: metrics.checkRaises,
 });
-const baseline = summarize(run(decideBotV8, hands, 1401));
-const candidate = summarize(run(decideBotV10Candidate, hands, 1401));
+const baseline = summarize(run(decideBotV10, hands, 1401));
+const candidate = summarize(run(decideBotV11Candidate, hands, 1401));
 console.log(JSON.stringify({ hands, baseline, candidate }, null, 2));
 if (process.argv.includes("--strict")) {
   const streets = Object.values(candidate.streets);
