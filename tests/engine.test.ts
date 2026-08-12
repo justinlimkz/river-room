@@ -957,6 +957,50 @@ function postflopCoachingSpot() {
   return state;
 }
 
+function kqoRiverTripleBarrelSpot(riverBet = 59) {
+  const state = createSession(seededRandom(918));
+  const opponent = 1;
+  state.handNumber = 1;
+  state.street = "river";
+  state.board = [card("K", "spades"), card("3", "diamonds"), card("2", "hearts"), card("A", "diamonds"), card("Q", "clubs")];
+  state.currentActor = humanSeat;
+  state.currentBet = riverBet;
+  state.minRaise = riverBet;
+  state.raiseCount = 1;
+  state.lastAggressor = opponent;
+  state.players.forEach((player, index) => {
+    player.folded = index !== humanSeat && index !== opponent;
+    player.acted = index !== humanSeat;
+    player.streetBet = 0;
+    player.committed = 0;
+  });
+  state.players[humanSeat].position = "HJ";
+  state.players[humanSeat].hole = [card("Q", "diamonds"), card("K", "hearts")];
+  state.players[humanSeat].stack = 163;
+  state.players[humanSeat].committed = 37;
+  state.players[opponent].position = "SB";
+  state.players[opponent].stack = 163 - riverBet;
+  state.players[opponent].streetBet = riverBet;
+  state.players[opponent].committed = 37 + riverBet;
+  state.players[opponent].hole = [card("A", "clubs"), card("A", "hearts")];
+  state.players[2].committed = 2;
+  state.actionLog = [
+    { street: "preflop", seat: 3, type: "fold", amount: 0, toCallBefore: 2, raiseLevel: 0, potBefore: 3 },
+    { street: "preflop", seat: humanSeat, type: "raise", amount: 4, toCallBefore: 2, raiseLevel: 0, potBefore: 3 },
+    { street: "preflop", seat: 4, type: "fold", amount: 0, toCallBefore: 4, raiseLevel: 1, potBefore: 7 },
+    { street: "preflop", seat: 0, type: "fold", amount: 0, toCallBefore: 4, raiseLevel: 1, potBefore: 7 },
+    { street: "preflop", seat: opponent, type: "call", amount: 4, toCallBefore: 3, raiseLevel: 1, potBefore: 7 },
+    { street: "preflop", seat: 2, type: "fold", amount: 2, toCallBefore: 2, raiseLevel: 1, potBefore: 10 },
+    { street: "flop", seat: opponent, type: "raise", amount: 3, toCallBefore: 0, raiseLevel: 0, potBefore: 10 },
+    { street: "flop", seat: humanSeat, type: "raise", amount: 10, toCallBefore: 3, raiseLevel: 1, potBefore: 13 },
+    { street: "flop", seat: opponent, type: "call", amount: 10, toCallBefore: 7, raiseLevel: 2, potBefore: 23 },
+    { street: "turn", seat: opponent, type: "raise", amount: 23, toCallBefore: 0, raiseLevel: 0, potBefore: 30 },
+    { street: "turn", seat: humanSeat, type: "call", amount: 23, toCallBefore: 23, raiseLevel: 1, potBefore: 53 },
+    { street: "river", seat: opponent, type: "raise", amount: riverBet, toCallBefore: 0, raiseLevel: 0, potBefore: 76 },
+  ];
+  return state;
+}
+
 function checkedToRiverTwoPairSpot() {
   const state = createSession(seededRandom(1303));
   const opponent = 0;
@@ -1193,6 +1237,44 @@ test("postflop coaching is deterministic and never uses an opponent's hidden car
   assert.equal(firstReview.grade, secondReview.grade);
   assert.ok((firstReview.equityHigh ?? 0) > (firstReview.equityLow ?? 1));
   assert.match(firstReview.basis!, /persistent public-action ranges/);
+});
+
+test("river coaching uses one range model for displayed equity, calling EV, and its recommendation", () => {
+  const state = kqoRiverTripleBarrelSpot();
+  const review = applyAction(state, humanSeat, { type: "call" }).reviews[0];
+  const call = review.alternatives.find((alternative) => alternative.action === "Call")!;
+  const expectedCallEv = review.equity! * (review.pot + review.toCall) - review.toCall;
+
+  assert.ok(Math.abs(call.ev! - expectedCallEv) <= 0.11, `${call.ev} vs ${expectedCallEv}`);
+  assert.ok(review.equity! < review.potOdds, "the modeled triple-barrel range is slightly too strong for a pure call");
+  assert.ok(review.equityHigh! > review.potOdds, "the close fold must retain the plausible calling side of the range");
+  assert.notEqual(call.verdict, "Costly");
+  assert.match(review.basis!, /complete heads-up river range comparison/);
+  assert.match(review.note, /same modeled river range shown above/);
+});
+
+test("river coaching cannot recommend folding when its modeled equity clears the immediate price", () => {
+  const state = kqoRiverTripleBarrelSpot(20);
+  const review = applyAction(state, humanSeat, { type: "call" }).reviews[0];
+  const call = review.alternatives.find((alternative) => alternative.action === "Call")!;
+
+  assert.ok(review.equity! > review.potOdds, `${review.equity} equity vs ${review.potOdds} price`);
+  assert.ok(call.ev! > 0);
+  assert.equal(review.suggestion, "Call");
+  assert.equal(review.grade, "Preferred");
+});
+
+test("complete river coaching ranges remain invariant to an opponent's hidden cards", () => {
+  const first = kqoRiverTripleBarrelSpot();
+  const second = kqoRiverTripleBarrelSpot();
+  second.players[1].hole = [card("J", "diamonds"), card("T", "diamonds")];
+  const firstReview = applyAction(first, humanSeat, { type: "call" }).reviews[0];
+  const secondReview = applyAction(second, humanSeat, { type: "call" }).reviews[0];
+
+  assert.equal(firstReview.equity, secondReview.equity);
+  assert.equal(firstReview.suggestion, secondReview.suggestion);
+  assert.equal(firstReview.alternatives.find((alternative) => alternative.action === "Call")!.ev,
+    secondReview.alternatives.find((alternative) => alternative.action === "Call")!.ev);
 });
 
 test("postflop action EV is deterministic, legal, and hidden-card invariant", () => {
