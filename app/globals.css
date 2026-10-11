@@ -383,7 +383,11 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
   .game-layout { min-height: 620px; }
   .table-zone { grid-template-rows: minmax(350px, 1fr) auto auto; padding: 24px 24px 16px; gap: 10px; }
   .poker-table { min-height: 330px; height: calc(100% - 20px); max-height: 410px; }
-  .table-center { transform: translateY(-28px); }
+  .table-center { transform: translateY(-16px); }
+  .community { height: 64px; }
+  .community .card { width: 44px; height: 62px; }
+  .pot-value { margin-bottom: 6px; }
+  .street-line { margin-top: 3px; }
   .status-strip { min-height: 52px; }
   .action-dock { padding: 12px; }
 }
