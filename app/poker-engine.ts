@@ -239,7 +239,7 @@ export const humanSeat = 5;
 export const potTotal = (state: HandState) => state.players.reduce((sum, player) => sum + player.committed, 0);
 export const CASH_RAKE = { rate: 0.05, cap: 3 } as const;
 
-function rakeFor(amount: number, board: Card[], remainingCap = CASH_RAKE.cap) {
+function rakeFor(amount: number, board: Card[], remainingCap: number = CASH_RAKE.cap) {
   if (board.length < 3 || amount <= 0 || remainingCap <= 0) return 0;
   return Math.min(remainingCap, Math.round(amount * CASH_RAKE.rate));
 }
