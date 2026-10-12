@@ -1,0 +1,1046 @@
+{
+  "schema": 1,
+  "source": {
+    "url": "https://github.com/noambrown/poker_solver",
+    "commit": "6a10442877ffc8fd28af93e16e279b9bbdd97b2a",
+    "algorithm": "CFR+",
+    "iterations": 20000,
+    "seed": null,
+    "license": "MIT",
+    "evConvention": "chips returned minus additional investment from the decision; prior contributions are sunk",
+    "rake": {
+      "rate": 0,
+      "cap": 0
+    },
+    "scope": "Heads-up river, restricted ranges, check or single all-in sizing; no online-population claim"
+  },
+  "games": [
+    {
+      "config": {
+        "board": [
+          "2s",
+          "3h",
+          "4d",
+          "6c",
+          "7c"
+        ],
+        "pot": 20,
+        "stack": 10,
+        "bet_sizes": [
+          0.5
+        ],
+        "include_all_in": true,
+        "max_raises": 0,
+        "players": [
+          {
+            "hands": [
+              "AsAd",
+              "QsQd",
+              "KsKd"
+            ],
+            "weights": [
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "hands": [
+              "AsAd",
+              "QsQd",
+              "KsKd"
+            ],
+            "weights": [
+              0,
+              0,
+              1
+            ]
+          }
+        ]
+      },
+      "configSha256": "a673fe2b3730074f102ca8323605680963f608201b809fd0789acacc8ae16fbe",
+      "analyticalEquilibriumCheck": {
+        "valueBet": 1,
+        "weakBet": 0.3333333333333333,
+        "catcherCall": 0.6666666666666666
+      },
+      "exploitabilityChips": 0.00014091765109824905,
+      "profile": {
+        "0": {
+          "root": [
+            [
+              "c",
+              "b10"
+            ],
+            [
+              [
+                5.36316796494975e-09,
+                0.999999994636832
+              ],
+              [
+                0.6666190526804892,
+                0.3333809473195109
+              ],
+              [
+                0.5,
+                0.5
+              ]
+            ]
+          ],
+          "c/b10": [
+            [
+              "c",
+              "f"
+            ],
+            [
+              [
+                0.7669404517453791,
+                0.233059548254621
+              ],
+              [
+                1.875040171892505e-09,
+                0.9999999981249599
+              ],
+              [
+                0.5,
+                0.5
+              ]
+            ]
+          ]
+        },
+        "1": {
+          "c": [
+            [
+              "c",
+              "b10"
+            ],
+            [
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.9999999750012499,
+                2.4998750062496874e-08
+              ]
+            ]
+          ],
+          "b10": [
+            [
+              "c",
+              "f"
+            ],
+            [
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.6666754143777603,
+                0.3333245856222397
+              ]
+            ]
+          ]
+        }
+      },
+      "cases": [
+        {
+          "id": "jam-10:root:0:0",
+          "history": [],
+          "player": 0,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Ad",
+            "As"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 20.000000075201577,
+              "frequency": 5.36316796494975e-09
+            },
+            {
+              "token": "b10",
+              "ev": 26.666754143777606,
+              "frequency": 0.999999994636832
+            }
+          ]
+        },
+        {
+          "id": "jam-10:root:0:1",
+          "history": [],
+          "player": 0,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Qd",
+            "Qs"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": -4.687366061428192e-16,
+              "frequency": 0.6666190526804892
+            },
+            {
+              "token": "b10",
+              "ev": -0.00026243133280878794,
+              "frequency": 0.3333809473195109
+            }
+          ]
+        },
+        {
+          "id": "jam-10:c:1:2",
+          "history": [
+            "c"
+          ],
+          "player": 1,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Kd",
+            "Ks"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Ad",
+                "As"
+              ],
+              "weight": 8.045326487798244e-09
+            },
+            {
+              "cards": [
+                "Qd",
+                "Qs"
+              ],
+              "weight": 0.9999999919546736
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 19.999999839093473,
+              "frequency": 0.9999999750012499
+            },
+            {
+              "token": "b10",
+              "ev": 19.999999833641816,
+              "frequency": 2.4998750062496874e-08
+            }
+          ]
+        },
+        {
+          "id": "jam-10:c/b10:0:0",
+          "history": [
+            "c",
+            "b10"
+          ],
+          "player": 0,
+          "contributions": [
+            0,
+            10
+          ],
+          "hero": [
+            "Ad",
+            "As"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 30.0,
+              "frequency": 0.7669404517453791
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.233059548254621
+            }
+          ]
+        },
+        {
+          "id": "jam-10:c/b10:0:1",
+          "history": [
+            "c",
+            "b10"
+          ],
+          "player": 0,
+          "contributions": [
+            0,
+            10
+          ],
+          "hero": [
+            "Qd",
+            "Qs"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": -10.0,
+              "frequency": 1.875040171892505e-09
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.9999999981249599
+            }
+          ]
+        },
+        {
+          "id": "jam-10:b10:1:2",
+          "history": [
+            "b10"
+          ],
+          "player": 1,
+          "contributions": [
+            10,
+            0
+          ],
+          "hero": [
+            "Kd",
+            "Ks"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Ad",
+                "As"
+              ],
+              "weight": 0.7499732170835044
+            },
+            {
+              "cards": [
+                "Qd",
+                "Qs"
+              ],
+              "weight": 0.25002678291649555
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 0.0010713166598224078,
+              "frequency": 0.6666754143777603
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.3333245856222397
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "config": {
+        "board": [
+          "2s",
+          "3h",
+          "4d",
+          "6c",
+          "7c"
+        ],
+        "pot": 20,
+        "stack": 20,
+        "bet_sizes": [
+          1.0
+        ],
+        "include_all_in": true,
+        "max_raises": 0,
+        "players": [
+          {
+            "hands": [
+              "AsAd",
+              "QsQd",
+              "KsKd"
+            ],
+            "weights": [
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "hands": [
+              "AsAd",
+              "QsQd",
+              "KsKd"
+            ],
+            "weights": [
+              0,
+              0,
+              1
+            ]
+          }
+        ]
+      },
+      "configSha256": "c6882623d9cf5fd70969e2f28b9bec97f6e1f39764f04bbefc3bef5df19ced1b",
+      "analyticalEquilibriumCheck": {
+        "valueBet": 1,
+        "weakBet": 0.5,
+        "catcherCall": 0.5
+      },
+      "exploitabilityChips": 0.00031979424279882096,
+      "profile": {
+        "0": {
+          "root": [
+            [
+              "c",
+              "b20"
+            ],
+            [
+              [
+                8.560178051703484e-09,
+                0.9999999914398219
+              ],
+              [
+                0.4999953638581517,
+                0.5000046361418483
+              ],
+              [
+                0.5,
+                0.5
+              ]
+            ]
+          ],
+          "c/b20": [
+            [
+              "c",
+              "f"
+            ],
+            [
+              [
+                0.8539823008849559,
+                0.14601769911504411
+              ],
+              [
+                2.499898186014881e-09,
+                0.9999999975001018
+              ],
+              [
+                0.5,
+                0.5
+              ]
+            ]
+          ]
+        },
+        "1": {
+          "c": [
+            [
+              "c",
+              "b20"
+            ],
+            [
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.9999999850007499,
+                1.4999250037498127e-08
+              ]
+            ]
+          ],
+          "b20": [
+            [
+              "c",
+              "f"
+            ],
+            [
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5000593141465336,
+                0.4999406858534663
+              ]
+            ]
+          ]
+        }
+      },
+      "cases": [
+        {
+          "id": "jam-20:root:0:0",
+          "history": [],
+          "player": 0,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Ad",
+            "As"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 20.00000021237876,
+              "frequency": 8.560178051703484e-09
+            },
+            {
+              "token": "b20",
+              "ev": 30.001186282930668,
+              "frequency": 0.9999999914398219
+            }
+          ]
+        },
+        {
+          "id": "jam-20:root:0:1",
+          "history": [],
+          "player": 0,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Qd",
+            "Qs"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": -7.499319592065039e-16,
+              "frequency": 0.4999953638581517
+            },
+            {
+              "token": "b20",
+              "ev": -0.0023725658613464873,
+              "frequency": 0.5000046361418483
+            }
+          ]
+        },
+        {
+          "id": "jam-20:c:1:2",
+          "history": [
+            "c"
+          ],
+          "player": 1,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Kd",
+            "Ks"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Ad",
+                "As"
+              ],
+              "weight": 1.712051455656566e-08
+            },
+            {
+              "cards": [
+                "Qd",
+                "Qs"
+              ],
+              "weight": 0.9999999828794854
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 19.999999657589708,
+              "frequency": 0.9999999850007499
+            },
+            {
+              "token": "b20",
+              "ev": 19.999999465173303,
+              "frequency": 1.4999250037498127e-08
+            }
+          ]
+        },
+        {
+          "id": "jam-20:c/b20:0:0",
+          "history": [
+            "c",
+            "b20"
+          ],
+          "player": 0,
+          "contributions": [
+            0,
+            20
+          ],
+          "hero": [
+            "Ad",
+            "As"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 40.0,
+              "frequency": 0.8539823008849559
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.14601769911504411
+            }
+          ]
+        },
+        {
+          "id": "jam-20:c/b20:0:1",
+          "history": [
+            "c",
+            "b20"
+          ],
+          "player": 0,
+          "contributions": [
+            0,
+            20
+          ],
+          "hero": [
+            "Qd",
+            "Qs"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": -20.0,
+              "frequency": 2.499898186014881e-09
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.9999999975001018
+            }
+          ]
+        },
+        {
+          "id": "jam-20:b20:1:2",
+          "history": [
+            "b20"
+          ],
+          "player": 1,
+          "contributions": [
+            20,
+            0
+          ],
+          "hero": [
+            "Kd",
+            "Ks"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Ad",
+                "As"
+              ],
+              "weight": 0.6666646042632793
+            },
+            {
+              "cards": [
+                "Qd",
+                "Qs"
+              ],
+              "weight": 0.3333353957367206
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 0.0001237442032380187,
+              "frequency": 0.5000593141465336
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.4999406858534663
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "config": {
+        "board": [
+          "2s",
+          "3h",
+          "4d",
+          "6c",
+          "7c"
+        ],
+        "pot": 20,
+        "stack": 40,
+        "bet_sizes": [
+          2.0
+        ],
+        "include_all_in": true,
+        "max_raises": 0,
+        "players": [
+          {
+            "hands": [
+              "AsAd",
+              "QsQd",
+              "KsKd"
+            ],
+            "weights": [
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "hands": [
+              "AsAd",
+              "QsQd",
+              "KsKd"
+            ],
+            "weights": [
+              0,
+              0,
+              1
+            ]
+          }
+        ]
+      },
+      "configSha256": "3e9ad76f7a7c61132f73662a9c60c2a97bfecc42a683d76ee49def5e2745f0cb",
+      "analyticalEquilibriumCheck": {
+        "valueBet": 1,
+        "weakBet": 0.6666666666666666,
+        "catcherCall": 0.3333333333333333
+      },
+      "exploitabilityChips": 0.0009740469436039234,
+      "profile": {
+        "0": {
+          "root": [
+            [
+              "c",
+              "b40"
+            ],
+            [
+              [
+                1.7998667992922912e-08,
+                0.999999982001332
+              ],
+              [
+                0.3334084565800028,
+                0.6665915434199972
+              ],
+              [
+                0.5,
+                0.5
+              ]
+            ]
+          ],
+          "c/b40": [
+            [
+              "c",
+              "f"
+            ],
+            [
+              [
+                0.9305538885646248,
+                0.06944611143537512
+              ],
+              [
+                3.7489676055199654e-09,
+                0.9999999962510324
+              ],
+              [
+                0.5,
+                0.5
+              ]
+            ]
+          ]
+        },
+        "1": {
+          "c": [
+            [
+              "c",
+              "b40"
+            ],
+            [
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.999999992500375,
+                7.499625018749063e-09
+              ]
+            ]
+          ],
+          "b40": [
+            [
+              "c",
+              "f"
+            ],
+            [
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.5,
+                0.5
+              ],
+              [
+                0.33321364719128144,
+                0.6667863528087186
+              ]
+            ]
+          ]
+        }
+      },
+      "cases": [
+        {
+          "id": "jam-40:root:0:0",
+          "history": [],
+          "player": 0,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Ad",
+            "As"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 20.00000026873581,
+              "frequency": 1.7998667992922912e-08
+            },
+            {
+              "token": "b40",
+              "ev": 33.32854588765126,
+              "frequency": 0.999999982001332
+            }
+          ]
+        },
+        {
+          "id": "jam-40:root:0:1",
+          "history": [],
+          "player": 0,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Qd",
+            "Qs"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Kd",
+                "Ks"
+              ],
+              "weight": 1.0
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": -1.124634049953492e-15,
+              "frequency": 0.3334084565800028
+            },
+            {
+              "token": "b40",
+              "ev": 0.007181168523112902,
+              "frequency": 0.6665915434199972
+            }
+          ]
+        },
+        {
+          "id": "jam-40:c:1:2",
+          "history": [
+            "c"
+          ],
+          "player": 1,
+          "contributions": [
+            0,
+            0
+          ],
+          "hero": [
+            "Kd",
+            "Ks"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Ad",
+                "As"
+              ],
+              "weight": 5.398383474105713e-08
+            },
+            {
+              "cards": [
+                "Qd",
+                "Qs"
+              ],
+              "weight": 0.9999999460161653
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": 19.999998920323307,
+              "frequency": 0.999999992500375
+            },
+            {
+              "token": "b40",
+              "ev": 19.999997135866657,
+              "frequency": 7.499625018749063e-09
+            }
+          ]
+        },
+        {
+          "id": "jam-40:b40:1:2",
+          "history": [
+            "b40"
+          ],
+          "player": 1,
+          "contributions": [
+            40,
+            0
+          ],
+          "hero": [
+            "Kd",
+            "Ks"
+          ],
+          "opponentRange": [
+            {
+              "cards": [
+                "Ad",
+                "As"
+              ],
+              "weight": 0.6000270412682694
+            },
+            {
+              "cards": [
+                "Qd",
+                "Qs"
+              ],
+              "weight": 0.39997295873173055
+            }
+          ],
+          "actions": [
+            {
+              "token": "c",
+              "ev": -0.002704126826944986,
+              "frequency": 0.33321364719128144
+            },
+            {
+              "token": "f",
+              "ev": 0.0,
+              "frequency": 0.6667863528087186
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

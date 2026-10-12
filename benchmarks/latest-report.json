@@ -1,0 +1,647 @@
+{
+  "schema": 1,
+  "fixtureSha256": "a0943d4c90b35206a241a578f44a5acd9a1059be1459e624c2e48d97912e281b",
+  "reference": {
+    "url": "https://github.com/noambrown/poker_solver",
+    "commit": "6a10442877ffc8fd28af93e16e279b9bbdd97b2a",
+    "algorithm": "CFR+",
+    "iterations": 20000,
+    "seed": null,
+    "license": "MIT",
+    "evConvention": "chips returned minus additional investment from the decision; prior contributions are sunk",
+    "rake": {
+      "rate": 0,
+      "cap": 0
+    },
+    "scope": "Heads-up river, restricted ranges, check or single all-in sizing; no online-population claim"
+  },
+  "summary": {
+    "cases": 16,
+    "terminalEV": {
+      "count": 10,
+      "maxAbsoluteError": 0.002704126826944986,
+      "tolerance": 0.051,
+      "passed": true
+    },
+    "coach": {
+      "actionEVCount": 32,
+      "meanAbsoluteEVError": 2.0873701573546395,
+      "maxAbsoluteEVError": 14.892818831476887,
+      "meanDecisionLossChips": 0.00033381914661315836,
+      "maxDecisionLossChips": 0.002704126826944986,
+      "rangeInput": "oracle ranges supplied; does not test inference"
+    },
+    "bots": {
+      "rng": "LCG; 100 seeds dispersed by uint32 golden-ratio multiplication per case",
+      "draws": 1600,
+      "matched": 1224,
+      "offTree": 376,
+      "meanLossOnMatched": 3.3527344329402538,
+      "scope": "restricted no-rake reference; production bots use fixed raked-game heuristics, so diagnostic only"
+    },
+    "strategyValidated": false,
+    "onlineTransferValidated": false,
+    "holdout": false
+  },
+  "exclusions": [
+    "Preflop/flop/turn",
+    "Broad and multiway ranges",
+    "Population realism",
+    "Raked equilibrium strategy",
+    "Learning and retention in unseen human games"
+  ],
+  "rows": [
+    {
+      "id": "jam-10:root:0:0",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 20.000000075201577,
+          "frequency": 5.36316796494975e-9
+        },
+        {
+          "token": "b10",
+          "ev": 26.666754143777606,
+          "frequency": 0.999999994636832
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 25.3,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 16.8,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 2.4666990053731324
+      }
+    },
+    {
+      "id": "jam-10:root:0:1",
+      "reference": [
+        {
+          "token": "c",
+          "ev": -4.687366061428192e-16,
+          "frequency": 0.6666190526804892
+        },
+        {
+          "token": "b10",
+          "ev": -0.00026243133280878794,
+          "frequency": 0.3333809473195109
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 4,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0.0002624313328083192,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 0.00016533173966924125
+      }
+    },
+    {
+      "id": "jam-10:c:1:2",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 19.999999839093473,
+          "frequency": 0.9999999750012499
+        },
+        {
+          "token": "b10",
+          "ev": 19.999999833641816,
+          "frequency": 2.4998750062496874e-8
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 25.3,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 20,
+          "method": "terminal-enumeration"
+        }
+      ],
+      "coachDecisionLossChips": 5.451656903687763e-9,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 3.4345438493232906e-9
+      }
+    },
+    {
+      "id": "jam-10:c/b10:0:0",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 30,
+          "frequency": 0.7669404517453791
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.233059548254621
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": 30,
+          "method": "terminal-enumeration"
+        },
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 0
+      }
+    },
+    {
+      "id": "jam-10:c/b10:0:1",
+      "reference": [
+        {
+          "token": "c",
+          "ev": -10,
+          "frequency": 1.875040171892505e-9
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.9999999981249599
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": -10,
+          "method": "terminal-enumeration"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 9.9
+      }
+    },
+    {
+      "id": "jam-10:b10:1:2",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 0.0010713166598224078,
+          "frequency": 0.6666754143777603
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.3333245856222397
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": 0,
+          "method": "terminal-enumeration"
+        },
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 0
+      }
+    },
+    {
+      "id": "jam-20:root:0:0",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 20.00000021237876,
+          "frequency": 8.560178051703484e-9
+        },
+        {
+          "token": "b20",
+          "ev": 30.001186282930668,
+          "frequency": 0.9999999914398219
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 25.9,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 16.8,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 38,
+        "offTree": 62,
+        "meanLossOnMatched": 10.001186070551908
+      }
+    },
+    {
+      "id": "jam-20:root:0:1",
+      "reference": [
+        {
+          "token": "c",
+          "ev": -7.499319592065039e-16,
+          "frequency": 0.4999953638581517
+        },
+        {
+          "token": "b20",
+          "ev": -0.0023725658613464873,
+          "frequency": 0.5000046361418483
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 8.3,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0.0023725658613457374,
+      "bot": {
+        "matched": 37,
+        "offTree": 63,
+        "meanLossOnMatched": 0
+      }
+    },
+    {
+      "id": "jam-20:c:1:2",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 19.999999657589708,
+          "frequency": 0.9999999850007499
+        },
+        {
+          "token": "b20",
+          "ev": 19.999999465173303,
+          "frequency": 1.4999250037498127e-8
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 25.9,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 20,
+          "method": "terminal-enumeration"
+        }
+      ],
+      "coachDecisionLossChips": 1.924164045874477e-7,
+      "bot": {
+        "matched": 37,
+        "offTree": 63,
+        "meanLossOnMatched": 0
+      }
+    },
+    {
+      "id": "jam-20:c/b20:0:0",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 40,
+          "frequency": 0.8539823008849559
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.14601769911504411
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": 40,
+          "method": "terminal-enumeration"
+        },
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 1.6
+      }
+    },
+    {
+      "id": "jam-20:c/b20:0:1",
+      "reference": [
+        {
+          "token": "c",
+          "ev": -20,
+          "frequency": 2.499898186014881e-9
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.9999999975001018
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": -20,
+          "method": "terminal-enumeration"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 18.2
+      }
+    },
+    {
+      "id": "jam-20:b20:1:2",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 0.0001237442032380187,
+          "frequency": 0.5000593141465336
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.4999406858534663
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": 0,
+          "method": "terminal-enumeration"
+        },
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 0
+      }
+    },
+    {
+      "id": "jam-40:root:0:0",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 20.00000026873581,
+          "frequency": 1.7998667992922912e-8
+        },
+        {
+          "token": "b40",
+          "ev": 33.32854588765126,
+          "frequency": 0.999999982001332
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 23.4,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 16.8,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 38,
+        "offTree": 62,
+        "meanLossOnMatched": 13.328545618915442
+      }
+    },
+    {
+      "id": "jam-40:root:0:1",
+      "reference": [
+        {
+          "token": "c",
+          "ev": -1.124634049953492e-15,
+          "frequency": 0.3334084565800028
+        },
+        {
+          "token": "b40",
+          "ev": 0.007181168523112902,
+          "frequency": 0.6665915434199972
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 14.9,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0,
+      "bot": {
+        "matched": 37,
+        "offTree": 63,
+        "meanLossOnMatched": 0.007181168523114031
+      }
+    },
+    {
+      "id": "jam-40:c:1:2",
+      "reference": [
+        {
+          "token": "c",
+          "ev": 19.999998920323307,
+          "frequency": 0.999999992500375
+        },
+        {
+          "token": "b40",
+          "ev": 19.999997135866657,
+          "frequency": 7.499625018749063e-9
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "all-in"
+          },
+          "ev": 23.4,
+          "method": "heuristic"
+        },
+        {
+          "action": {
+            "type": "check"
+          },
+          "ev": 20,
+          "method": "terminal-enumeration"
+        }
+      ],
+      "coachDecisionLossChips": 0.0000017844566500002657,
+      "bot": {
+        "matched": 37,
+        "offTree": 63,
+        "meanLossOnMatched": 0
+      }
+    },
+    {
+      "id": "jam-40:b40:1:2",
+      "reference": [
+        {
+          "token": "c",
+          "ev": -0.002704126826944986,
+          "frequency": 0.33321364719128144
+        },
+        {
+          "token": "f",
+          "ev": 0,
+          "frequency": 0.6667863528087186
+        }
+      ],
+      "coach": [
+        {
+          "action": {
+            "type": "call"
+          },
+          "ev": 0,
+          "method": "terminal-enumeration"
+        },
+        {
+          "action": {
+            "type": "fold"
+          },
+          "ev": 0,
+          "method": "heuristic"
+        }
+      ],
+      "coachDecisionLossChips": 0.002704126826944986,
+      "bot": {
+        "matched": 100,
+        "offTree": 0,
+        "meanLossOnMatched": 0.002650044290406086
+      }
+    }
+  ]
+}

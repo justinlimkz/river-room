@@ -1,0 +1,28 @@
+{
+  "cases": 16,
+  "terminalEV": {
+    "count": 10,
+    "maxAbsoluteError": 0.002704126826944986,
+    "tolerance": 0.051,
+    "passed": true
+  },
+  "coach": {
+    "actionEVCount": 32,
+    "meanAbsoluteEVError": 2.0873701573546395,
+    "maxAbsoluteEVError": 14.892818831476887,
+    "meanDecisionLossChips": 0.00033381914661315836,
+    "maxDecisionLossChips": 0.002704126826944986,
+    "rangeInput": "oracle ranges supplied; does not test inference"
+  },
+  "bots": {
+    "rng": "LCG; 100 seeds dispersed by uint32 golden-ratio multiplication per case",
+    "draws": 1600,
+    "matched": 1224,
+    "offTree": 376,
+    "meanLossOnMatched": 3.3527344329402538,
+    "scope": "restricted no-rake reference; production bots use fixed raked-game heuristics, so diagnostic only"
+  },
+  "strategyValidated": false,
+  "onlineTransferValidated": false,
+  "holdout": false
+}

@@ -1243,7 +1243,7 @@ test("river coaching uses one range model for displayed equity, calling EV, and 
   const state = kqoRiverTripleBarrelSpot();
   const review = applyAction(state, humanSeat, { type: "call" }).reviews[0];
   const call = review.alternatives.find((alternative) => alternative.action === "Call")!;
-  const expectedCallEv = review.equity! * (review.pot + review.toCall) - review.toCall;
+  const expectedCallEv = review.equity! * (review.pot + review.toCall - 3) - review.toCall;
 
   assert.ok(Math.abs(call.ev! - expectedCallEv) <= 0.11, `${call.ev} vs ${expectedCallEv}`);
   assert.ok(review.equity! < review.potOdds, "the modeled triple-barrel range is slightly too strong for a pure call");

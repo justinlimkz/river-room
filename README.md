@@ -41,3 +41,9 @@ The worker moves expensive work off the UI thread; it does not change the underl
 ## Hosting
 
 The existing private Site identity is in `.openai/hosting.json`. Preserve its audience and use the Sites workflow to synchronize, build, package, and deploy. Do not replace the source with the generic starter.
+
+### Coach validation and private information
+
+The `public-coach-v2` update fixes terminal river payout EV, incorporates rake into coaching estimates, handles short calls/refunds/side-pot eligibility and odd chips, and evaluates the actual custom bet size. The coach receives an explicit public snapshot with no hidden opponent cards, deck or bot-profile values. Opponents retain their own policies.
+
+Every recommendation is marked **Unvalidated strategy**; old saved reviews show a legacy warning. Heuristic EV bands are not confidence intervals, and preflop grades no longer invent a dollar cost. Run `npm run benchmark:coach` for the independent public CFR+ reference comparisons, or `npm run benchmark:coach:strict` for the deliberately stricter strategy gate (currently fails). See [benchmark provenance, results and limitations](benchmarks/README.md).

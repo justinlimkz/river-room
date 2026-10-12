@@ -20,6 +20,7 @@ import {
   type Seat,
 } from "./poker-engine";
 
+import validation from "./coach-validation.json";
 import { decisionFacts, potRaiseTarget, practiceQueue } from "./training";
 import { usePokerEngine } from "./usePokerEngine";
 
@@ -122,7 +123,13 @@ function ReviewPanel({ items, title, onClose, drill = false }: { items: ReviewIt
         </div>
         <div className="review-navigation"><button disabled={index === 0} onClick={() => move(-1)}>← Previous</button><span>Decision {items.length ? index + 1 : 0} of {items.length}</span><button disabled={index >= items.length - 1} onClick={() => move(1)}>Next →</button></div>
         {drill && <p className="drill-intro">Recall practice · choose a line before revealing the coach. These are your past decisions, prioritized by the coach’s mistake labels, not new simulated hands.</p>}
-        <p className="review-disclaimer">Advice uses only information available when you acted. Close spots are labeled as such; estimates are approximate rather than solver-grade GTO solutions.</p>
+        <p className="review-disclaimer">Strategy advice is unvalidated. The coach uses public actions, observed stats and your cards; it cannot read hidden bot profiles. EV bands are heuristic, not statistical confidence intervals.</p>
+        <details className="coach-glossary coach-validation">
+          <summary>What has been independently checked?</summary>
+          <p>{validation.cases} public CFR+ reference decisions across three restricted heads-up river games. {validation.terminalEV.count} terminal EV comparisons pass within {validation.terminalEV.tolerance} chip. These reference games have no rake; separate regression tests check this table’s rake, refunds, short calls and odd chips.</p>
+          <p>Across all tested actions, the coach’s maximum EV error is {validation.coach.maxAbsoluteEVError.toFixed(1)} chips. Future betting, inferred ranges, mixed strategies and real online transfer remain unvalidated. Small action-choice loss against a fixed solver strategy does not establish low exploitability.</p>
+          <p><a href="/coach-validation-report.json" target="_blank" rel="noreferrer">Download benchmark results and exclusions</a> · <a href="https://github.com/noambrown/poker_solver/tree/6a10442877ffc8fd28af93e16e279b9bbdd97b2a" target="_blank" rel="noreferrer">Pinned independent solver</a></p>
+        </details>
         <details className="coach-glossary">
           <summary>Poker terms used in the coach</summary>
           <div>
@@ -143,7 +150,8 @@ function ReviewPanel({ items, title, onClose, drill = false }: { items: ReviewIt
           <div className="review-list">
             {displayedItems.map((item) => (
               <article className="review-item" key={item.id}>
-                <div className="review-item-top"><span>Hand #{item.handNumber} · {item.street} · {item.position}</span>{reveal && <b className={`grade ${item.grade.toLowerCase()}`}>{item.grade}</b>}</div>
+                <div className="review-item-top"><span>Hand #{item.handNumber} · {item.street} · {item.position}</span>{reveal && <b className={`grade ${item.grade.toLowerCase()}`}>Model: {item.grade}</b>}</div>
+                <p className="validation-notice"><strong>Unvalidated strategy</strong> · {item.modelVersion === "public-coach-v2" ? "Public-information model · payout math tested; ranges and strategy not solver verified." : "Legacy review · predates the EV and privacy fixes. Old estimates have not been recalculated."}</p>
                 <div className="review-cards">
                   <div><small>Your hand</small><span>{item.cards.map(cardLabel).join(" ")}</span></div>
                   <div><small>Board</small><span>{item.board.length ? item.board.map(cardLabel).join(" ") : "Not dealt"}</span></div>
@@ -159,13 +167,13 @@ function ReviewPanel({ items, title, onClose, drill = false }: { items: ReviewIt
                 {reveal && <>
                 {answer && <p className="recall-answer" role="status">You chose {answer} · coach assessment: {item.alternatives.find((candidate) => candidate.action === answer)?.verdict}. Compare the reasoning below.</p>}
                 <p className="review-verdict"><strong>Recommended baseline: {item.suggestion}.</strong> {item.note}</p>
-                {item.estimatedRegret !== undefined && <p className="ev-summary"><strong>Modeled opportunity cost:</strong> about ${item.estimatedRegret.toFixed(1)} versus the highest-EV line. Treat small gaps and overlapping intervals as mixes.</p>}
+                {item.estimatedRegret !== undefined && <p className="ev-summary"><strong>Modeled opportunity cost:</strong> about ${item.estimatedRegret.toFixed(1)} versus the highest-EV line. Small gaps are inconclusive; these estimates do not establish optimal mixing frequencies.</p>}
                 {item.recommendedSize && <p className="size-guidance">Sizing guide: target ${item.recommendedSize.target}; approximately ${item.recommendedSize.min}–${item.recommendedSize.max} remains reasonable.</p>}
                 <div className="review-alternatives" aria-label="Action comparison">
                   {item.alternatives.map((alternative) => <div key={alternative.action}><b className={`mini-grade ${alternative.verdict.toLowerCase()}`}>{alternative.verdict}</b><strong>{alternative.action}</strong><span>{alternative.reason}</span></div>)}
                 </div>
                 <p className="review-takeaway"><strong>Remember:</strong> {item.takeaway}</p>
-                {item.basis && <small className="review-basis">{item.confidence ?? "Low"} confidence · {item.basis}</small>}
+                {item.basis && <small className="review-basis">{item.confidence ?? "Low"} model separation (uncalibrated) · {item.basis}</small>}
                 </>}
               </article>
             ))}
@@ -221,7 +229,7 @@ function PreflopChartsPanel({ onClose }: { onClose: () => void }) {
           <div><span className="eyebrow">Decision coach reference</span><h2 id="charts-title">Preflop charts</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="Close preflop charts">×</button>
         </div>
-        <p className="review-disclaimer">These are the coach’s baseline ranges, not automatic answers. Exact action order, position, price, effective stack and players still to act can change the recommendation.</p>
+        <p className="review-disclaimer">Unvalidated heuristic ranges; these have not been checked against a matched preflop solver. Exact action order, position, price, effective stack and players still to act can change the recommendation.</p>
         <div className="chart-tabs" role="tablist" aria-label="Preflop chart type">
           {PREFLOP_CHARTS.map((candidate, index) => <button
             key={candidate.id}
@@ -574,11 +582,11 @@ export default function PokerTable() {
               note={`${postflopDecisions} decisions after the flop`}
             />
             <section className="leak-dashboard" aria-label="Training focus">
-              <div className="stat-section-title"><strong>TRAINING FOCUS</strong><span>confidence-adjusted</span></div>
+              <div className="stat-section-title"><strong>TRAINING FOCUS</strong><span>unvalidated model flags</span></div>
               {trainingLeaks.length ? trainingLeaks.map((leak) => (
                 <div className="leak-row" key={leak.key}>
-                  <span><strong>{LEAK_LABELS[leak.key]}</strong><small>{leak.mistakes} costly choices in {leak.opportunities} spots · ${leak.totalRegret.toFixed(0)} modeled cost</small></span>
-                  <b>{leak.opportunities >= 30 ? "Established" : leak.opportunities >= 15 ? "Emerging" : "Early"}</b>
+                  <span><strong>{LEAK_LABELS[leak.key]}</strong><small>{leak.mistakes} model flags in {leak.opportunities} spots · ${leak.totalRegret.toFixed(0)} modeled cost</small></span>
+                  <b>{leak.opportunities >= 30 ? "30+ spots" : leak.opportunities >= 15 ? "15+ spots" : "Early"}</b>
                 </div>
               )) : <p className="leak-empty">Keep playing: each category needs at least 8 relevant decisions before it is labeled a possible leak.</p>}
               {trainingLeaks[0] && <p className="practice-focus"><strong>Next-session drill:</strong> pause on every {LEAK_LABELS[trainingLeaks[0].key].toLowerCase()} spot and state your range, price, and purpose before acting.</p>}

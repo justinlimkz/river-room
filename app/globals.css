@@ -395,3 +395,9 @@ input[type="range"] { accent-color: var(--gold); width: 100%; }
   .top-center { top: 2%; }
   .hero { bottom: -3%; }
 }
+
+.validation-notice { margin: 10px 0; padding: 10px 12px; border-left: 3px solid #d8aa63; background: #d8aa6310; color: #c9bdab; font-size: 12px; line-height: 1.55; }
+.validation-notice strong { color: #e3bf88; }
+
+.coach-validation p { display: block; padding: 10px 12px; line-height: 1.6; }
+.coach-validation a { color: #e3bf88; text-underline-offset: 3px; }

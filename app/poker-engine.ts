@@ -15,6 +15,7 @@ export type ActionEvaluation = {
   evLow: number;
   evHigh: number;
   rangeEquity?: number;
+  evMethod?: "terminal-enumeration" | "terminal-sampling" | "heuristic";
   foldProbability?: number;
   equityWhenCalled?: number;
   raiseProbability?: number;
@@ -113,6 +114,8 @@ export type Seat = {
 };
 
 export type ReviewItem = {
+  modelVersion?: "public-coach-v2";
+  validationStatus?: "unvalidated";
   id: string;
   handNumber: number;
   street: Street;
@@ -1632,13 +1635,14 @@ function estimateLedgerEquity(
   iterations: number,
   random: () => number,
   response?: (opponent: number, combo: RangeCombo) => number,
+  exactRiver = false,
 ) {
   const hole = state.players[seatIndex].hole;
   const opponents = buildBotContext(state, seatIndex).opponents;
   const known = new Set([...hole, ...state.board].map(cardLabel));
   // Full river enumeration is reserved for the coach's complete ledger. Live
   // bot searches retain their bounded sampler and deterministic random stream.
-  if (state.board.length === 5 && opponents.length === 1 && (ledger[opponents[0]]?.length ?? 0) > 280) {
+  if (state.board.length === 5 && opponents.length === 1 && exactRiver) {
     const opponent = opponents[0];
     const hero = evaluateHand([...hole, ...state.board]).score;
     let weightedShare = 0;
@@ -1685,13 +1689,70 @@ function rangeResponseRates(state: HandState, opponent: number, combos: RangeCom
   return { fold: totals.fold / total, call: totals.call / total, raise: totals.raise / total };
 }
 
+// Incremental stack EV at this decision: prior contributions are sunk. Settle
+// each contribution layer, refund unmatched chips, and allocate integer odd chips.
+// Ranges are hypotheses; exact settlement does not validate those hypotheses.
+function terminalRiverEV(
+  state: HandState, seat: number, action: PokerAction, ledger: RangeLedger,
+  iterations: number, random: () => number, rake: { rate: number; cap: number },
+): { ev: number; method: "terminal-enumeration" | "terminal-sampling" } | undefined {
+  if (state.street !== "river" || action.type === "fold" || action.type === "raise") return;
+  const hero = state.players[seat];
+  const cost = action.type === "check" ? 0 : Math.min(toCallFor(state, seat), hero.stack);
+  if (action.type === "all-in" && hero.stack > cost) return;
+  if (!state.players.every((p, i) => i === seat || p.folded || p.allIn || (p.acted && p.streetBet === state.currentBet))) return;
+  const opponents = state.players.flatMap((p, i) => i !== seat && !p.folded ? [i] : []);
+  const contributions = state.players.map((p, i) => p.committed + (i === seat ? cost : 0));
+  const levels = [...new Set(contributions.filter(Boolean))].sort((a, b) => a - b);
+  const heroScore = evaluateHand([...hero.hole, ...state.board]).score;
+  const value = (cards: Record<number, Card[]>) => {
+    const scores = new Map([[seat, heroScore], ...opponents.map(i => [i, evaluateHand([...cards[i], ...state.board]).score] as const)]);
+    let previous = 0, usedRake = 0, payout = 0;
+    for (const level of levels) {
+      const contributors = contributions.flatMap((c, i) => c >= level ? [i] : []);
+      const amount = (level - previous) * contributors.length;
+      previous = level;
+      const eligible = contributors.filter(i => !state.players[i].folded);
+      if (!eligible.length) continue;
+      if (contributors.length === 1) { if (contributors[0] === seat) payout += amount; continue; }
+      const fee = Math.min(rake.cap - usedRake, Math.round(amount * rake.rate));
+      usedRake += fee;
+      const best = eligible.reduce((a, b) => compareScores(scores.get(a)!, scores.get(b)!) >= 0 ? a : b);
+      const winners = eligible.filter(i => compareScores(scores.get(i)!, scores.get(best)!) === 0)
+        .sort((a, b) => clockwiseDistance(state.dealer, a) - clockwiseDistance(state.dealer, b));
+      if (winners.includes(seat)) payout += Math.floor((amount - fee) / winners.length) + (winners.indexOf(seat) < (amount - fee) % winners.length ? 1 : 0);
+    }
+    return payout - cost;
+  };
+  const known = new Set([...hero.hole, ...state.board].map(cardLabel));
+  let total = 0, weight = 0;
+  if (opponents.length === 1) {
+    for (const combo of ledger[opponents[0]] ?? []) {
+      if (combo.weight <= 0 || combo.cards.some(c => known.has(cardLabel(c)))) continue;
+      total += value({ [opponents[0]]: combo.cards }) * combo.weight;
+      weight += combo.weight;
+    }
+    return weight ? { ev: total / weight, method: "terminal-enumeration" } : undefined;
+  }
+  // Multiway range sampling remains approximate; never label it enumeration.
+  for (let run = 0; run < iterations; run++) {
+    const available = makeDeck().filter(c => !known.has(cardLabel(c)));
+    const cards = Object.fromEntries(opponents.map(i => [i, sampleRangeCombo(ledger[i] ?? [], available, random)]));
+    if (opponents.some(i => cards[i].length !== 2)) continue;
+    total += value(cards); weight++;
+  }
+  return weight ? { ev: total / weight, method: "terminal-sampling" } : undefined;
+}
+
 export function evaluatePostflopActionsV10(
   state: HandState,
   seatIndex: number,
   iterations = 72,
   random: () => number = Math.random,
   ledgerOverride?: RangeLedger,
+  options: { extraAction?: PokerAction; actions?: PokerAction[]; rake?: { rate: number; cap: number } } = {},
 ): ActionEvaluation[] {
+  if (ledgerOverride) state = coachView(state, seatIndex);
   if (state.street === "preflop" || state.players[seatIndex].hole.length !== 2) return [];
   const context = buildBotContext(state, seatIndex);
   const bounds = legalBounds(state, seatIndex);
@@ -1699,47 +1760,62 @@ export function evaluatePostflopActionsV10(
   const pot = potTotal(state);
   const coachingEvaluation = ledgerOverride !== undefined;
   const ledger = ledgerOverride ?? buildRangeLedger(state, seatIndex);
-  const overallEquity = estimateLedgerEquity(state, seatIndex, ledger, iterations, random);
+  const overallEquity = estimateLedgerEquity(state, seatIndex, ledger, iterations, random, undefined, coachingEvaluation);
   const heroClass = classifyStrategicHand(player.hole, state.board);
   const board = analyzeBoard(state.board);
   const vulnerability = board.dynamic && ["strong-value", "thin-value", "bluff-catcher", "showdown-value"].includes(heroClass) ? 0.08 : 0;
   const positionRealization = context.inPosition ? 0.96 : 0.84;
   const streetRealization = state.street === "river" ? 1 : state.street === "turn" ? 0.94 : 0.88;
-  return postflopCandidates(state, seatIndex).map((action) => {
+  const rake = options.rake ?? CASH_RAKE;
+  const net = (amount: number) => amount - (coachingEvaluation ? Math.min(rake.cap, Math.round(amount * rake.rate)) : 0);
+  const candidates = options.actions ?? postflopCandidates(state, seatIndex);
+  if (options.extraAction && validateAction(state, seatIndex, options.extraAction).legal && !evaluationForAction(candidates.map(action => ({ action } as ActionEvaluation)), options.extraAction)) candidates.push(options.extraAction);
+  return candidates.map((action) => {
+    const terminal = coachingEvaluation ? terminalRiverEV(state, seatIndex, action, ledger, iterations, random, rake) : undefined;
     let ev = 0;
     let scale = pot;
     let foldProbability: number | undefined;
     let equityWhenCalled: number | undefined;
     let raiseProbability: number | undefined;
-    if (action.type === "fold") ev = 0;
-    else if (action.type === "check") ev = overallEquity * pot * Math.max(0.62, streetRealization * positionRealization - vulnerability);
+    if (terminal) ev = terminal.ev;
+    else if (action.type === "fold") ev = 0;
+    else if (action.type === "check") ev = overallEquity * net(pot) * Math.max(0.62, streetRealization * positionRealization - vulnerability);
     else if (action.type === "call") {
       const call = Math.min(bounds.toCall, player.stack);
       scale = pot + call;
       const realization = coachingEvaluation && state.street === "river" && context.activePlayers === 2
         ? 1
         : Math.max(0.6, streetRealization * positionRealization - vulnerability * 0.7);
-      ev = overallEquity * (pot + call) * realization - call;
+      const contestable = coachingEvaluation ? state.players.reduce((sum, p) => sum + Math.min(p.committed, player.committed + call), 0) : pot;
+      ev = overallEquity * net(contestable + call) * realization - call;
     } else {
       const target = action.type === "all-in" ? bounds.max : action.amount!;
-      const invest = Math.max(0, target - player.streetBet);
+      const effectiveTarget = coachingEvaluation ? Math.min(target, Math.max(...context.opponents.map(i => state.players[i].streetBet + state.players[i].stack))) : target;
+      const invest = Math.max(0, effectiveTarget - player.streetBet);
       const fraction = invest / Math.max(1, pot);
-      const rates = context.opponents.map((opponent) => rangeResponseRates(state, opponent, ledger[opponent] ?? [], fraction));
+      const rates = context.opponents.map((opponent) => coachingEvaluation && state.players[opponent].allIn ? { fold: 0, call: 1, raise: 0 } : rangeResponseRates(state, opponent, ledger[opponent] ?? [], fraction));
       foldProbability = rates.reduce((probability, rate) => probability * rate.fold, 1);
-      raiseProbability = 1 - rates.reduce((probability, rate) => probability * (1 - rate.raise), 1);
+      raiseProbability = 1 - rates.reduce((probability, rate, i) => probability * (1 - (coachingEvaluation && (player.stack + player.streetBet <= effectiveTarget || state.players[context.opponents[i]].stack + state.players[context.opponents[i]].streetBet <= effectiveTarget) ? 0 : rate.raise)), 1);
       const expectedCallers = Math.max(1, rates.reduce((sum, rate) => sum + rate.call, 0));
       equityWhenCalled = estimateLedgerEquity(state, seatIndex, ledger, Math.max(16, Math.round(iterations * 0.55)), random,
-        (opponent, combo) => rangeResponseWeight(combo.handClass, "call", fraction, state.street, state.players[opponent].profile));
+        (opponent, combo) => rangeResponseWeight(combo.handClass, "call", fraction, state.street, state.players[opponent].profile) + (coachingEvaluation ? rangeResponseWeight(combo.handClass, "raise", fraction, state.street, state.players[opponent].profile) : 0), coachingEvaluation);
       const opponentCall = Math.max(0, target - state.currentBet);
-      const calledPot = pot + invest + opponentCall * expectedCallers;
+      const matchedCalls = coachingEvaluation ? context.opponents.reduce((sum, opponent, i) => {
+        const p = state.players[opponent];
+        const additional = Math.min(p.stack, Math.max(0, effectiveTarget - p.streetBet));
+        return sum + additional * (1 - rates[i].fold) / Math.max(0.00001, 1 - foldProbability!);
+      }, 0) : opponentCall * expectedCallers;
+      const contestable = coachingEvaluation ? state.players.reduce((sum, p) => sum + Math.min(p.committed, player.committed + invest), 0) : pot;
+      const calledPot = contestable + invest + matchedCalls;
       scale = calledPot;
       const raisePenalty = raiseProbability * invest * (["nuts", "strong-value", "combo-draw", "nut-draw"].includes(heroClass) ? 0.04 : 0.32);
-      ev = foldProbability * pot + (1 - foldProbability) * (equityWhenCalled * calledPot - invest) - raisePenalty;
+      ev = foldProbability * net(pot) + (1 - foldProbability) * (equityWhenCalled * net(calledPot) - invest) - raisePenalty;
     }
     const rangeAmbiguity = state.street === "river" && ["thin-value", "bluff-catcher"].includes(heroClass) ? 0.065 : 0;
     const uncertainty = Math.max(1, scale * (0.045 + rangeAmbiguity + Math.max(0, context.activePlayers - 2) * 0.02));
     return {
       action,
+      evMethod: (terminal?.method ?? "heuristic") as ActionEvaluation["evMethod"],
       label: actionLabel({ ...state, currentActor: seatIndex }, action),
       ev: Math.round(ev * 10) / 10,
       evLow: Math.round((ev - uncertainty) * 10) / 10,
@@ -2224,7 +2300,7 @@ export function buildRangeLedger(state: HandState, observerSeat: number, comboLi
   const ledger: RangeLedger = {};
   state.players.forEach((opponent, opponentIndex) => {
     if (opponentIndex === observerSeat || opponent.folded) return;
-    const combos: RangeCombo[] = baseCombos.map(({ cards, handClass }) => ({ cards, handClass, weight: Math.max(0.0001, opponentRangeWeight(state, opponentIndex, cards)) }));
+    const combos: RangeCombo[] = baseCombos.map(({ cards, handClass, ...cached }) => ({ cards, handClass, ...cached, weight: Math.max(0.0001, opponentRangeWeight(state, opponentIndex, cards)) }));
     const total = combos.reduce((sum, combo) => sum + combo.weight, 0) || 1;
     ledger[opponentIndex] = combos.map((combo) => ({ ...combo, weight: combo.weight / total }));
   });
@@ -2735,7 +2811,7 @@ export function decideBotV12Ablation(state: HandState, seatIndex: number, module
 function evaluationForAction(evaluations: ActionEvaluation[], action: PokerAction) {
   const sameType = evaluations.filter((evaluation) => evaluation.action.type === action.type);
   if (action.type !== "raise") return sameType[0];
-  return sameType.sort((a, b) => Math.abs((a.action.amount ?? 0) - (action.amount ?? 0)) - Math.abs((b.action.amount ?? 0) - (action.amount ?? 0)))[0];
+  return sameType.find((evaluation) => evaluation.action.amount === action.amount);
 }
 
 function decideBotV9FromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
@@ -2819,11 +2895,12 @@ function downgradeForSizing(grade: ReviewItem["grade"], state: HandState, action
 
 function buildReviewV8(state: HandState, action: PokerAction, equityOverride?: number): ReviewItem {
   const player = state.players[humanSeat];
-  const toCall = toCallFor(state, humanSeat);
+  const toCall = Math.min(toCallFor(state, humanSeat), player.stack);
   const pot = potTotal(state);
   const context = buildBotContext(state, humanSeat);
   const bounds = legalBounds(state, humanSeat);
-  const potOdds = toCall / Math.max(1, pot + toCall);
+  const contestable = state.players.reduce((sum, p) => sum + Math.min(p.committed, player.committed + toCall), 0);
+  const potOdds = toCall / Math.max(1, contestable + toCall);
   const common = {
     id: `${state.handNumber}-${state.street}-${state.actionLog.length}`,
     handNumber: state.handNumber,
@@ -2959,14 +3036,43 @@ function formatEv(value: number) {
   return `${value >= 0 ? "+" : "−"}$${Math.abs(value).toFixed(1)}`;
 }
 
-function buildReview(state: HandState, action: PokerAction): ReviewItem {
+/** Public decision snapshot. Private profiles/cards/deck and prior coach outputs never enter coaching. */
+export function coachView(state: HandState, observerSeat = humanSeat): HandState {
+  return {
+    version: 9, handNumber: state.handNumber, dealer: state.dealer, street: state.street,
+    board: structuredClone(state.board), deck: [],
+    players: state.players.map((p, index) => ({
+      id: `seat-${index}`, name: index === observerSeat ? "You" : `Seat ${index + 1}`,
+      isHuman: index === observerSeat, profile: "balanced",
+      stack: p.stack, streetBet: p.streetBet, committed: p.committed,
+      hole: index === observerSeat ? structuredClone(p.hole) : [],
+      folded: p.folded, allIn: p.allIn, acted: p.acted, actedAtBet: p.actedAtBet,
+      voluntaryPreflop: p.voluntaryPreflop, raisedPreflop: p.raisedPreflop,
+      lastAction: p.lastAction, position: p.position, stats: { ...p.stats },
+    })),
+    currentBet: state.currentBet, minRaise: state.minRaise, raiseCount: state.raiseCount,
+    preflopRaises: state.preflopRaises, preflopOpener: state.preflopOpener,
+    preflopAggressor: state.preflopAggressor, lastAggressor: state.lastAggressor,
+    actionLog: structuredClone(state.actionLog), currentActor: state.currentActor, status: state.status,
+    history: [], reviews: [], reviewArchive: [], trainingDecisions: [], trainingSummary: emptyTrainingSummary(),
+    result: "", sessionStart: 0, sessionHands: 0, sessionRake: 0,
+  };
+}
+
+export function buildReview(input: HandState, action: PokerAction): ReviewItem {
+  const state = coachView(input);
+  const review = buildPublicReview(state, action);
+  return { ...review, modelVersion: "public-coach-v2", validationStatus: "unvalidated" };
+}
+
+function buildPublicReview(state: HandState, action: PokerAction): ReviewItem {
   if (state.street === "preflop") return buildReviewV8(state, action);
   const reviewIterations = 36;
   // Coaching favors range completeness over the live bot's bounded 280-combo
   // search. This also ensures the equity shown to the learner is the same
   // equity used to compare legal actions.
   const reviewLedger = buildRangeLedger(state, humanSeat, Number.POSITIVE_INFINITY);
-  const evaluations = evaluatePostflopActionsV10(state, humanSeat, reviewIterations, seededRandom(reviewSeed(state) ^ 0x9e3779b9), reviewLedger);
+  const evaluations = evaluatePostflopActionsV10(state, humanSeat, reviewIterations, seededRandom(reviewSeed(state) ^ 0x9e3779b9), reviewLedger, { extraAction: action });
   const best = evaluations[0];
   const chosen = evaluationForAction(evaluations, action);
   const baseline = buildReviewV8(state, action, best?.rangeEquity);
@@ -3006,7 +3112,7 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
       evHigh: evaluation.evHigh,
       foldProbability: evaluation.foldProbability,
       equityWhenCalled: evaluation.equityWhenCalled,
-      reason: `${formatEv(evaluation.ev)} modeled EV (${formatEv(evaluation.evLow)} to ${formatEv(evaluation.evHigh)}). ${response}`,
+      reason: `${formatEv(evaluation.ev)} modeled EV (${formatEv(evaluation.evLow)} to ${formatEv(evaluation.evHigh)}; uncalibrated band). ${evaluation.evMethod === "terminal-enumeration" ? "Exact payout enumeration conditional on the assumed range. " : "Heuristic estimate, not solver verified. "}${response}`,
     };
   });
   const separation = evaluations[1] ? best.evLow - evaluations[1].evHigh : 0;
@@ -3022,8 +3128,8 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
   const thinValueNote = concept === "Thin river value"
     ? "The comparison discounts missed draws that improve showdown equity but usually fold. A river bet needs enough worse hands in the calling range, not merely a high chance of being ahead before betting."
     : state.street === "river"
-      ? "The estimate compares legal actions using the same modeled river range shown above, the immediate calling price, likely folds, position, stack depth and rake. Overlapping ranges indicate a genuinely close decision."
-      : "The estimate compares legal actions using likely folds, the range that continues, future-card equity, position, stack depth and rake. Overlapping ranges indicate a genuinely close decision.";
+      ? "The estimate compares legal actions using the same modeled river range shown above, the immediate calling price, likely folds, position, stack depth and rake. The displayed bands are heuristic sensitivity margins, not calibrated confidence intervals."
+      : "The estimate compares legal actions using likely folds, the range that continues, future-card equity, position, stack depth and rake. The displayed bands are heuristic sensitivity margins, not calibrated confidence intervals.";
   const flopTextureNote = flopAnalysis
     ? ` This is a ${flopAnalysis.texture.stability} ${flopAnalysis.texture.tone} ${flopAnalysis.texture.band} flop. ${flopAnalysis.rangeAdvantage >= 0.35
       ? "Your modeled range has the advantage: it contains more strong hands overall, which can support frequent small bets."
@@ -3049,11 +3155,11 @@ function buildReview(state: HandState, action: PokerAction): ReviewItem {
         ? "Bet for value when worse hands can call, for protection when free cards matter, or as a bluff when better hands can fold. Let range advantage and board texture guide the size and frequency."
         : flopAnalysis
           ? "Compare the price with your equity against the bettor's range; raise a polarized range of strong value and robust draws rather than every hand that can continue."
-      : "Compare actions by expected value, then treat small differences as mixes rather than absolute rules.",
+      : "Compare the assumptions behind each action; small modeled EV differences are inconclusive and do not establish optimal mixing frequencies.",
     alternatives,
     note: thinValueNote + flopTextureNote,
     confidence,
-    basis: `${evaluations.length} legal actions · persistent public-action ranges · ${state.street === "river" && buildBotContext(state, humanSeat).activePlayers === 2 ? "complete heads-up river range comparison" : `${reviewIterations} bounded multi-street rollouts`}${flopAnalysis ? " · flop texture, range advantage and representative turn branches" : ""} · EV intervals include model uncertainty`,
+    basis: `${evaluations.length} legal actions · persistent public-action ranges · ${state.street === "river" && buildBotContext(state, humanSeat).activePlayers === 2 ? "complete heads-up river range comparison" : `${reviewIterations} card-runout samples; future betting is heuristic`}${flopAnalysis ? " · flop texture, range advantage and representative turn branches" : ""} · uncalibrated heuristic EV bands; strategy unvalidated`,
     estimatedRegret: Math.round(regret * 10) / 10,
     recommendedSize: best.action.type === "raise" && best.action.amount !== undefined ? sizeBand(best.action.amount, legalBounds(state, humanSeat)) : undefined,
   };
@@ -3075,7 +3181,7 @@ function leakForDecision(state: HandState, review: ReviewItem): LeakKey {
 
 function recordTrainingDecision(state: HandState, before: HandState, review: ReviewItem) {
   const leakKey = leakForDecision(before, review);
-  const regret = review.estimatedRegret ?? (review.grade === "Costly" ? Math.max(2, review.pot * 0.1) : 0);
+  const regret = review.estimatedRegret ?? 0;
   const mistake = review.grade === "Costly" || regret >= Math.max(2, review.pot * 0.1);
   const decision: TrainingDecision = {
     id: review.id,
