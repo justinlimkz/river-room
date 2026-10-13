@@ -53,9 +53,9 @@ npm run lint
 
 Bots decide from `botView`: the public state plus their own cards and style. Opponents' cards and styles, the deck and learner history are removed. The coach uses `coachView`, which also hides every bot's style.
 
-## Hosting
+## Running locally
 
-The existing private Site identity is in `.openai/hosting.json`. Preserve its audience and use the Sites workflow to synchronize, build, package, and deploy. Do not replace the source with the generic starter.
+River Room runs locally only; there is no hosted deployment. `npm run dev` serves it at http://localhost:3000 with hot reload. `npm run build && npm start` serves the production build through a local Workers runtime (Miniflare).
 
 ### Coach validation and private information
 

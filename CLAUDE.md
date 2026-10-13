@@ -1,6 +1,6 @@
 # River Room: maintenance notes
 
-A six-max $1/$2 no-limit Hold'em practice table with heuristic bots and a post-hand decision coach. See README.md for the code map and RULES.md for the supported game. Earlier history (built with Codex) is in git; the original checkout is `~/Documents/Codex/2026-08-06/i-d`.
+A locally run six-max $1/$2 no-limit Hold'em practice table with heuristic bots and a post-hand decision coach. See README.md for the code map and RULES.md for the supported game. Earlier history (built with Codex) is in git; the original checkout is `~/Documents/Codex/2026-08-06/i-d`.
 
 ## Checks
 - `npm run typecheck`, `npm run lint`, `npm run test:unit` after any change. `npm test` adds the production build, the server-render test and the coach benchmark.
