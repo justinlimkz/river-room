@@ -64,8 +64,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid #9cf0c5; outline-
 .seat-panel { background: linear-gradient(145deg, rgba(31,42,38,.98), rgba(13,20,18,.98)); border: 1px solid rgba(222,232,225,.16); border-radius: 9px; padding: 9px 10px 8px; box-shadow: 0 10px 24px rgba(0,0,0,.5); }
 .seat.active .seat-panel { border-color: var(--mint); box-shadow: 0 0 0 2px rgba(120,216,169,.15), 0 12px 28px #000; }
 .seat.folded { opacity: .42; }
-.seat.vacant { opacity: .52; }
-.vacant-panel { min-height: 52px; border-style: dashed; background: rgba(12, 19, 17, .7); color: #87938d; }
 .seat-topline { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
 .position { font: 700 9px var(--font-geist-mono); background: #d3b16d; color: #1e1b13; padding: 3px 5px; border-radius: 4px; }
 .stack { display: flex; align-items: center; gap: 6px; font: 600 13px var(--font-geist-mono); margin-top: 6px; }

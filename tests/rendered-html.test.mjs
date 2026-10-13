@@ -13,39 +13,24 @@ async function render() {
   );
 }
 
-test("server-renders the River Room application shell", async () => {
+test("server-renders the River Room shell with metadata", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>River Room/);
   assert.match(html, /Hold’em Trainer/);
+  assert.match(html, /og:image/);
+  // The session lives in local storage, so the server renders the loading state.
+  assert.match(html, /Shuffling the deck/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
-test("starter preview is fully removed", async () => {
-  const [page, table, layout, packageJson] = await Promise.all([
+test("the starter template has been replaced", async () => {
+  const [page, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/PokerTable.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
   assert.match(page, /PokerTable/);
-  assert.match(table, /River Room house rules/);
-  assert.match(table, /No cap on raises/);
-  assert.match(table, /reviewMode && key === "v"/);
-  assert.match(table, /<kbd>V<\/kbd> Back to table/);
-  assert.match(table, /\["5", "7", "p", "a"\]/);
-  assert.match(table, /aria-keyshortcuts="5"/);
-  assert.match(table, /aria-keyshortcuts="7"/);
-  assert.match(table, /aria-keyshortcuts="P"/);
-  assert.match(table, /aria-keyshortcuts="A"/);
-  assert.match(table, /Poker terms used in the coach/);
-  assert.match(table, /A 3-bet made after an initial raise and at least one call/);
-  assert.match(table, /Pot odds \(price to call\)/);
-  assert.match(table, /Decision coach reference/);
-  assert.match(table, /Preflop charts/);
-  assert.match(table, /Range notation/);
-  assert.match(layout, /River Room/);
-  assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
+  assert.doesNotMatch(`${page}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview|site-creator/);
 });

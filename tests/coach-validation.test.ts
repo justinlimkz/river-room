@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyAction, buildReview, coachView, evaluatePostflopActionsV10, seededRandom, createSession, type PokerAction, type HandState } from '../app/poker-engine';
+import { applyAction, buildReview, coachView, evaluatePostflopActions, seededRandom, createSession, type PokerAction, type HandState } from '../app/poker-engine';
 import { riverState, rangeLedger, parseCard } from '../benchmarks/adapter';
 const royalBoard=['Qs','Js','Ts','2d','3c'];
-const evaluate=(state:HandState,action:PokerAction,opponent=['9c','9d'])=>evaluatePostflopActionsV10(state,5,36,seededRandom(1),rangeLedger(state,[{cards:opponent,weight:1}]),{actions:[action]})[0];
+const evaluate=(state:HandState,action:PokerAction,opponent=['9c','9d'])=>evaluatePostflopActions(state,5,36,seededRandom(1),rangeLedger(state,[{cards:opponent,weight:1}]),{actions:[action]})[0];
 
 // Constants below are derived from the house rules, independently of evaluator
 // implementation: $200 pot less $3 rake; a $20 call receives $237 minus its cost.
@@ -24,7 +24,7 @@ test('terminal losses and fractional weighted ranges have the correct incrementa
   const s=riverState(['2s','3h','4d','6c','7c'],['Ks','Kd']);
   Object.assign(s.players[0],{committed:120,streetBet:20});s.currentBet=20;
   assert.equal(evaluate(s,{type:'call'},['As','Ad']).ev,-20);
-  const e=evaluatePostflopActionsV10(s,5,36,seededRandom(1),rangeLedger(s,[{cards:['As','Ad'],weight:3},{cards:['Qs','Qd'],weight:1}]),{actions:[{type:'call'}]})[0];
+  const e=evaluatePostflopActions(s,5,36,seededRandom(1),rangeLedger(s,[{cards:['As','Ad'],weight:3},{cards:['Qs','Qd'],weight:1}]),{actions:[{type:'call'}]})[0];
   assert.equal(e.ev,39.3); // .25 * 237 - 20 = 39.25, rounded to .1
 });
 test('short call excludes uncallable excess and all-in call is identical',()=>{
@@ -48,7 +48,7 @@ test('multiway terminal payout respects side-pot eligibility and single hand rak
   Object.assign(s.players[0],{committed:100,allIn:true});
   Object.assign(s.players[1],{committed:100,folded:false,allIn:true});
   const ledger={...rangeLedger(s,[{cards:['9c','9d'],weight:1}]),1:rangeLedger(s,[{cards:['8c','8d'],weight:1}])[0]};
-  const e=evaluatePostflopActionsV10(s,5,36,seededRandom(1),ledger,{actions:[{type:'check'}]})[0];
+  const e=evaluatePostflopActions(s,5,36,seededRandom(1),ledger,{actions:[{type:'check'}]})[0];
   assert.equal(e.ev,147);assert.equal(e.evMethod,'terminal-sampling'); // hero only eligible for 3 * 50 less 3
 });
 test('a first river check is not incorrectly treated as a terminal payout',()=>{
@@ -76,7 +76,7 @@ test('custom wager is evaluated at its actual size, without nearest-size grading
   assert.ok(r.alternatives.some(a=>a.action==='Bet to $47'));
 });
 test('preflop grades do not manufacture dollar regret without an EV estimate',()=>{
-  let s=createSession(seededRandom(18));s.currentActor=5;s.players[5].acted=false;
+  const s=createSession(seededRandom(18));s.currentActor=5;s.players[5].acted=false;
   s.players[5].hole=['As','Ad'].map(parseCard);
   const next=applyAction(s,5,{type:'fold'});
   assert.notEqual(next,s);

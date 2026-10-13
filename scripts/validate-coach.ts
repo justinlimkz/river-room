@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { evaluatePostflopActionsV10, decideBot, seededRandom, validateAction, type PokerAction } from '../app/poker-engine';
+import { evaluatePostflopActions, decideBot, seededRandom, validateAction, type PokerAction } from '../app/poker-engine';
 import { riverState, rangeLedger, solverAction } from '../benchmarks/adapter';
 
 const fixtureBytes = readFileSync('benchmarks/fixtures/public-river-cfr.json');
@@ -42,7 +42,7 @@ for (const game of fixture.games) {
       if(a.token.startsWith('b')) assert.equal(Number(a.token.slice(1)),config.stack,'Unsupported non-all-in sizing');
     });
     actions.forEach(action=>assert.ok(validateAction(state,5,action).legal,'Reference action illegal in adapter'));
-    const estimates = evaluatePostflopActionsV10(state,5,36,seededRandom(73),rangeLedger(state,c.opponentRange),{actions, rake:fixture.source.rake});
+    const estimates = evaluatePostflopActions(state,5,36,seededRandom(73),rangeLedger(state,c.opponentRange),{actions, rake:fixture.source.rake});
     const key=(a:PokerAction)=>JSON.stringify(a);
     const refs = new Map<string,number>(actions.map((a,i)=>[key(a),c.actions[i].ev]));
     const bestEV = Math.max(...refs.values());

@@ -25,18 +25,33 @@ Requires Node.js 22.13+ and the dependencies in `package-lock.json`.
 
 ```sh
 npm install
-npm run dev
-npm test
+npm run dev        # http://localhost:3000
+npm run test:unit  # engine, training-math, worker and coach tests (~1 min)
+npm test           # production build, server render, unit tests, coach benchmark
+npm run typecheck
+npm run lint
 ```
 
-`npm test` builds the production site, checks server rendering, and runs engine, training-math, and worker-protocol tests. `npm run benchmark:bot` and `npm run audit:postflop` run the existing policy comparisons; these are more expensive and do not test the new UI.
+`npm run benchmark:bot` and `npm run audit:postflop` run the paired bot-policy comparisons; they are slow and do not exercise the UI.
 
-- `app/poker-engine.ts`: rules, bot policies, range model, reviews, and migrations.
-- `app/training.ts`: pot-size targets, contestable calling price, effective stacks, session accounting, and recall ordering.
-- `app/poker.worker.ts` / `app/usePokerEngine.ts`: background decisions and coaching, duplicate-request guard, stale-result cancellation, timeout recovery, and compatibility fallback.
-- `app/PokerTable.tsx` / `app/globals.css`: responsive table, learning views, controls, and accessible dialogs.
+### Code map
 
-The worker moves expensive work off the UI thread; it does not change the underlying strategy or make computations cheaper. If workers are unavailable, compatibility mode runs on the main thread. Reviews render one item at a time to keep long histories small in the DOM.
+- `app/poker-engine.ts`: public entry point that re-exports `app/engine/*`. Modules are layered so lower ones never import higher ones:
+  - `types.ts`, `cards.ts` (deck, RNG, hand evaluator)
+  - `rules.ts`: house rules, betting, side pots, rake and showdown (`applyTableAction`, no coaching)
+  - `board.ts`, `profiles.ts`, `context.ts`: board texture and hand classes, bot style constants, public decision context, `coachView` and `botView`
+  - `preflop.ts`: ranges, charts and preflop plans
+  - `ranges.ts`, `evaluation.ts`: public-action range ledgers, equity and action-EV estimates
+  - `bots.ts`: bot policies. Live play is V9 preflop and V12 → V11 → V10 → candidate → V7 postflop. The frozen `decideBotV8/V10/V11` exports are the baselines that new candidates must beat.
+  - `coach.ts`: decision reviews and training-leak accounting
+  - `game.ts`: `applyAction`, which applies the rules and records the coach's review when the learner acts
+  - `persistence.ts`: save validation and migration
+- `app/training.ts`: pot-size targets, contestable calling price, effective stacks and recall ordering.
+- `app/poker.worker.ts` / `app/usePokerEngine.ts`: background decisions and coaching, a duplicate-request guard, stale-result cancellation, and timeout recovery. A failed worker is restarted on the next request, falling back to the main thread after repeated failures.
+- `app/useSavedSession.ts`: local-storage session and preferences. Saves are debounced and flushed on page hide. An unreadable save is backed up to `riverroom-session-unreadable` before a new table opens.
+- `app/PokerTable.tsx`, `app/components/*`, `app/globals.css`: the table, learning views, controls and accessible dialogs.
+
+Bots decide from `botView`: the public state plus their own cards and style. Opponents' cards and styles, the deck and learner history are removed. The coach uses `coachView`, which also hides every bot's style.
 
 ## Hosting
 

@@ -5,7 +5,7 @@ import type { EngineRequest, EngineResponse } from "../app/poker.worker";
 
 test("background engine returns the same transition and handles errors without changing the input", async () => {
   let response: EngineResponse | undefined;
-  const scope = { onmessage: (_event: MessageEvent<EngineRequest>) => {}, postMessage: (value: EngineResponse) => { response = value; } };
+  const scope = { onmessage: (() => {}) as (event: MessageEvent<EngineRequest>) => void, postMessage: (value: EngineResponse) => { response = value; } };
   Object.assign(globalThis, { self: scope });
   await import("../app/poker.worker");
   let state = createSession(seededRandom(33));

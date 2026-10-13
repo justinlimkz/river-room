@@ -20,12 +20,8 @@ import {
   decideBotV11,
   decideBotV12Candidate,
   decideBotV12Ablation,
-  decideBotLegacy,
-  decideBotV6,
   estimateRangeEquity,
-  estimateRangeEquityV6,
   evaluatePostflopActions,
-  evaluatePostflopActionsV10,
   evaluateHand,
   humanSeat,
   legalBounds,
@@ -42,6 +38,7 @@ import {
   type BotProfile,
   type Card,
   type Position,
+  botView,
 } from "../app/poker-engine";
 
 const card = (rank: Card["rank"], suit: Card["suit"]): Card => ({ rank, suit });
@@ -224,6 +221,70 @@ test("postflop pots pay capped rake while uncalled wagers remain unraked", () =>
   assert.equal(state.players[1].stack, 297);
   assert.match(state.result, /wins \$97 uncontested · \$3 rake/);
   assert.equal(state.players.reduce((sum, player) => sum + player.stack, 0) + state.sessionRake, 600 + 200);
+});
+
+test("an uncalled postflop bet is returned before the pot is raked", () => {
+  let state = createSession(seededRandom(47));
+  state.street = "flop";
+  state.board = [card("A", "clubs"), card("7", "diamonds"), card("2", "spades")];
+  state.currentActor = 0;
+  state.currentBet = 30;
+  state.minRaise = 30;
+  state.players.forEach((player, index) => {
+    player.folded = index > 1;
+    player.acted = index > 1;
+    player.streetBet = index === 1 ? 30 : 0;
+    player.committed = index === 0 ? 10 : index === 1 ? 40 : 0;
+    player.stack = 100;
+  });
+  state = applyAction(state, 0, { type: "fold" });
+  // Only the $20 matched pot is contested: 5% rounds to $1, not $3 on $50.
+  assert.equal(state.sessionRake, 1);
+  assert.equal(state.players[1].stack, 149);
+  assert.match(state.result, /wins \$9 uncontested · \$1 rake/);
+});
+
+test("side pots are raked once on the combined contested total", () => {
+  let state = createSession(seededRandom(48));
+  state.street = "river";
+  state.board = [card("2", "clubs"), card("7", "diamonds"), card("9", "spades"), card("J", "hearts"), card("K", "clubs")];
+  state.currentBet = 0;
+  state.minRaise = 2;
+  state.players.forEach((player, index) => {
+    player.folded = ![0, 1, humanSeat].includes(index);
+    player.acted = index !== humanSeat;
+    player.streetBet = 0;
+    player.committed = index === 0 ? 10 : index === 1 || index === humanSeat ? 15 : 0;
+    player.stack = index === 0 ? 0 : 100;
+    player.allIn = index === 0;
+  });
+  state.players[0].hole = [card("A", "spades"), card("A", "hearts")];
+  state.players[1].hole = [card("3", "diamonds"), card("4", "hearts")];
+  state.players[humanSeat].hole = [card("5", "spades"), card("6", "diamonds")];
+  state.currentActor = humanSeat;
+  const chipsBefore = state.players.reduce((sum, player) => sum + player.stack + player.committed, 0);
+  state = applyAction(state, humanSeat, { type: "check" });
+  // Main pot $30 + side pot $10: 5% of $40 is $2. Rounding each pot separately gave $3.
+  assert.equal(state.sessionRake, 2);
+  assert.equal(state.players[0].stack, 28);
+  assert.equal(state.players.reduce((sum, player) => sum + player.stack, 0) + state.sessionRake, chipsBefore);
+});
+
+test("bots act on a view without opponents' cards, styles, deck or learner history", () => {
+  const state = createSession(seededRandom(49));
+  state.players[2].profile = "caller";
+  const view = botView(state, 0);
+  assert.deepEqual(view.players[0].hole, state.players[0].hole);
+  assert.equal(view.players[0].profile, state.players[0].profile);
+  view.players.forEach((player, index) => {
+    if (index === 0) return;
+    assert.deepEqual(player.hole, []);
+    assert.equal(player.profile, "balanced");
+  });
+  assert.deepEqual(view.deck, []);
+  assert.deepEqual(view.reviewArchive, []);
+  view.players[0].stack = -1;
+  assert.notEqual(state.players[0].stack, -1, "view must not alias live state");
 });
 
 test("an uncontested result reports net profit and uses human grammar", () => {
@@ -465,9 +526,9 @@ test("postflop range updates respond to board-relative value actions", () => {
     { street: "turn", seat: opponent, type: "call", amount: 59, toCallBefore: 59, raiseLevel: 1 },
     { street: "river", seat: opponent, type: "all-in", amount: 115, toCallBefore: 0, raiseLevel: 0 },
   ];
-  const prior = estimateRangeEquityV6(state, hero, 1200, seededRandom(99));
+  // The removed action-blind V6 range model estimated 0.638 here.
   const revised = estimateRangeEquity(state, hero, 1200, seededRandom(99));
-  assert.ok(revised < prior - 0.07, `prior ${prior}, revised ${revised}`);
+  assert.ok(revised < 0.638 - 0.07, `revised ${revised}`);
 });
 
 test("passive profiles sometimes stab after the aggressor checks to them", () => {
@@ -492,14 +553,12 @@ test("passive profiles sometimes stab after the aggressor checks to them", () =>
     { street: "preflop", seat: actor, type: "call", amount: 8, toCallBefore: 6, raiseLevel: 1 },
     { street: "flop", seat: opponent, type: "check", amount: 0, toCallBefore: 0, raiseLevel: 0 },
   ];
-  let priorBets = 0;
   let revisedBets = 0;
   for (let seed = 1; seed <= 500; seed += 1) {
-    if (["raise", "all-in"].includes(decideBotV6(state, actor, seededRandom(seed)).type)) priorBets += 1;
     if (["raise", "all-in"].includes(decideBot(state, actor, seededRandom(seed)).type)) revisedBets += 1;
   }
+  // The removed V6 policy stabbed 1 time in 500 here.
   assert.ok(revisedBets >= 35, `revised stabs ${revisedBets}`);
-  assert.ok(revisedBets > priorBets + 25, `prior ${priorBets}, revised ${revisedBets}`);
 });
 
 test("live postflop play uses the benchmark-cleared candidate", () => {
@@ -570,15 +629,13 @@ test("passive BTN players raise strong playable opens more often", () => {
   state.currentActor = actor;
   state.players[actor].profile = "caller";
   state.players[actor].hole = [card("A", "clubs"), card("9", "clubs")];
-  let priorRaises = 0;
   let revisedRaises = 0;
-  const priorRandom = seededRandom(8121);
   const revisedRandom = seededRandom(8121);
   for (let run = 1; run <= 300; run += 1) {
-    if (["raise", "all-in"].includes(decideBotV6(state, actor, priorRandom).type)) priorRaises += 1;
     if (["raise", "all-in"].includes(decideBot(state, actor, revisedRandom).type)) revisedRaises += 1;
   }
-  assert.ok(revisedRaises >= 120 && revisedRaises > priorRaises + 25, `prior ${priorRaises}, revised ${revisedRaises}`);
+  // The removed V6 policy raised 93 times in 300 here.
+  assert.ok(revisedRaises >= 120, `revised ${revisedRaises}`);
 });
 
 test("SB isolation ranges tighten against sticky limpers", () => {
@@ -592,13 +649,12 @@ test("SB isolation ranges tighten against sticky limpers", () => {
   state.players[limper].stats.pfr = 2;
   state.players[limper].voluntaryPreflop = true;
   state.actionLog = [{ street: "preflop", seat: limper, type: "call", amount: 2, toCallBefore: 2, raiseLevel: 0 }];
-  let priorRaises = 0;
   let revisedRaises = 0;
   for (let seed = 1; seed <= 300; seed += 1) {
-    if (["raise", "all-in"].includes(decideBotV6(state, actor, seededRandom(seed)).type)) priorRaises += 1;
     if (["raise", "all-in"].includes(decideBot(state, actor, seededRandom(seed)).type)) revisedRaises += 1;
   }
-  assert.ok(revisedRaises < priorRaises * 0.5, `prior ${priorRaises}, revised ${revisedRaises}`);
+  // The removed V6 policy isolated 291 times in 300 here.
+  assert.ok(revisedRaises < 145, `revised ${revisedRaises}`);
 });
 
 test("the latest street aggressor remains the initiative owner", () => {
@@ -617,7 +673,7 @@ test("the latest street aggressor remains the initiative owner", () => {
   assert.equal(buildBotContext(state, actor).aggressor, flopAggressor);
 });
 
-test("the new strategy remains behaviorally distinct from the frozen legacy benchmark", () => {
+test("the BB defends K7o against a small-blind open", () => {
   const state = createSession(seededRandom(18));
   const actor = 2;
   const opener = 1;
@@ -635,7 +691,6 @@ test("the new strategy remains behaviorally distinct from the frozen legacy benc
   state.players[opener].position = "SB";
   state.players[opener].streetBet = 6;
   assert.equal(decideBot(state, actor, seededRandom(4)).type, "call");
-  assert.equal(decideBotLegacy(state, actor, seededRandom(4)).type, "fold");
 });
 
 test("postflop position is computed relative to live opponents, including BB versus SB", () => {
@@ -1307,8 +1362,8 @@ test("v10 bounded search is deterministic, legal, and does not inspect hidden ca
   const first = postflopCoachingSpot();
   const second = postflopCoachingSpot();
   second.players[0].hole = [card("2", "diamonds"), card("3", "diamonds")];
-  const firstEvaluation = evaluatePostflopActionsV10(first, humanSeat, 24, seededRandom(1301));
-  const secondEvaluation = evaluatePostflopActionsV10(second, humanSeat, 24, seededRandom(1301));
+  const firstEvaluation = evaluatePostflopActions(first, humanSeat, 24, seededRandom(1301));
+  const secondEvaluation = evaluatePostflopActions(second, humanSeat, 24, seededRandom(1301));
   assert.deepEqual(firstEvaluation, secondEvaluation);
   firstEvaluation.forEach((evaluation) => assert.equal(validateAction(first, humanSeat, evaluation.action).legal, true));
   assert.deepEqual(decideBotV10Candidate(first, humanSeat, seededRandom(1302)), decideBotV10Candidate(second, humanSeat, seededRandom(1302)));
