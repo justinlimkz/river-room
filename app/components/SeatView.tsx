@@ -2,8 +2,9 @@ import { STYLE_LABELS, type HandState, type Seat } from "../poker-engine";
 import { formatChips } from "./format";
 import { PlayingCard } from "./PlayingCard";
 
-// Opponents sit clockwise from the player's seat at the bottom: seat 0 is bottom-left.
-const SEAT_PLACE = ["bottom-left", "top-left", "top", "top-right", "bottom-right", "hero"];
+// The engine deals clockwise 0 → 1 → 2 → 3 → 5 (the player) → 4 (see CLOCKWISE_SEATS), so clockwise from
+// the player's seat at the bottom the opponents are seats 4, 0, 1, 2, 3.
+const SEAT_PLACE = ["top-left", "top", "top-right", "bottom-right", "bottom-left", "hero"];
 
 function betVerb(lastAction: string) {
   if (lastAction.startsWith("Bet")) return "Bets";
