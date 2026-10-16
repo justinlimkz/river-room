@@ -1,4 +1,4 @@
-import { legalBounds, potTotal, toCallFor, type HandState, type ReviewItem } from "./poker-engine";
+import { legalBounds, potTotal, toCallFor, type HandState } from "./poker-engine";
 
 // A pot raise includes the call in the pot before calculating the raise.
 export function potRaiseTarget(state: HandState, seat: number, fraction: number) {
@@ -24,9 +24,4 @@ export function decisionFacts(state: HandState, seat: number) {
       Math.max(0, ...live.map((player) => player.stack + player.streetBet))),
     net: hero.stack + hero.committed - state.sessionStart,
   };
-}
-
-export function practiceQueue(items: ReviewItem[]): ReviewItem[] {
-  const priority = { Costly: 0, Viable: 1, Preferred: 2 };
-  return [...items].reverse().sort((a, b) => priority[a.grade] - priority[b.grade]).slice(0, 20);
 }

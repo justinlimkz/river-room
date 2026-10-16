@@ -8,14 +8,13 @@ const BACKUP_KEY = "riverroom-session-unreadable";
 const PREFERENCES_KEY = "riverroom-preferences-v1";
 const SAVE_DELAY_MS = 250;
 
-export type Preferences = { mode: "study" | "play"; inBB: boolean; speed: "normal" | "fast" };
-const DEFAULT_PREFERENCES: Preferences = { mode: "study", inBB: true, speed: "normal" };
+export type Preferences = { inBB: boolean; speed: "normal" | "fast" };
+const DEFAULT_PREFERENCES: Preferences = { inBB: true, speed: "normal" };
 
 function readPreferences(): Preferences {
   try {
     const saved = JSON.parse(localStorage.getItem(PREFERENCES_KEY) ?? "null");
     return {
-      mode: saved?.mode === "play" ? "play" : "study",
       inBB: typeof saved?.inBB === "boolean" ? saved.inBB : DEFAULT_PREFERENCES.inBB,
       speed: saved?.speed === "fast" ? "fast" : "normal",
     };

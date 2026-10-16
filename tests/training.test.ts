@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSession, humanSeat, seededRandom, type ReviewItem } from "../app/poker-engine";
-import { decisionFacts, potRaiseTarget, practiceQueue } from "../app/training";
+import { createSession, humanSeat, seededRandom } from "../app/poker-engine";
+import { decisionFacts, potRaiseTarget } from "../app/training";
 
 test("pot-size raises include the call and respect min and max", () => {
   const state = createSession(seededRandom(15));
@@ -40,14 +40,4 @@ test("short all-in price excludes side-pot chips the player cannot win", () => {
   assert.equal(facts.call, 20);
   assert.equal(facts.contestablePot, 40);
   assert.equal(facts.price, 1 / 3);
-});
-
-test("recall prioritizes mistakes and keeps recent decisions without mutating history", () => {
-  const items = [
-    { id: "old", grade: "Costly" }, { id: "good", grade: "Preferred" },
-    { id: "new", grade: "Costly" }, { id: "close", grade: "Viable" },
-  ] as ReviewItem[];
-  assert.deepEqual(practiceQueue(items).map((r) => r.id), ["new", "old", "close", "good"]);
-  assert.deepEqual(items.map((r) => r.id), ["old", "good", "new", "close"]);
-  assert.equal(practiceQueue(Array.from({ length: 50 }, () => items[0])).length, 20);
 });

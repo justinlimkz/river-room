@@ -13,12 +13,10 @@ import {
 } from "./poker-engine";
 import { formatChips } from "./components/format";
 import { PlayingCard } from "./components/PlayingCard";
-import { PreflopChartsPanel } from "./components/PreflopChartsPanel";
 import { ReviewPanel } from "./components/ReviewPanel";
-import { RulesPanel } from "./components/RulesPanel";
 import { SeatView } from "./components/SeatView";
-import { SessionDashboard } from "./components/SessionDashboard";
-import { decisionFacts, potRaiseTarget, practiceQueue } from "./training";
+import { SettingsPopover } from "./components/SettingsPopover";
+import { decisionFacts, potRaiseTarget } from "./training";
 import { useModalFocus } from "./useModalFocus";
 import { usePokerEngine } from "./usePokerEngine";
 import { useSavedSession } from "./useSavedSession";
@@ -27,19 +25,15 @@ const PRESET_FRACTIONS: Record<string, number> = { "5": 0.5, "7": 0.75, p: 1 };
 
 export default function PokerTable() {
   const { state, setState, preferences, updatePreferences, storageWarning, resetSession } = useSavedSession();
-  const { mode, inBB, speed } = preferences;
+  const { inBB, speed } = preferences;
   const [raiseTo, setRaiseTo] = useState<string | null>(null);
-  const [reviewMode, setReviewMode] = useState<"current" | "history" | "drill" | null>(null);
-  const [rulesOpen, setRulesOpen] = useState(false);
-  const [chartsOpen, setChartsOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [reviewMode, setReviewMode] = useState<"current" | "history" | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [paused, setPaused] = useState(false);
-  const [priceGuess, setPriceGuess] = useState("");
-  const [priceRevealed, setPriceRevealed] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const { run: runEngine, cancel: cancelEngine, busy, error: engineError } = usePokerEngine(setState);
-  const modalOpen = Boolean(reviewMode || rulesOpen || chartsOpen || resetOpen);
-  const closeModals = () => { setReviewMode(null); setRulesOpen(false); setChartsOpen(false); setResetOpen(false); };
+  const modalOpen = Boolean(reviewMode || resetOpen);
+  const closeModals = () => { setReviewMode(null); setResetOpen(false); };
   useModalFocus(modalOpen, closeModals);
 
   const bounds = useMemo(() => state ? legalBounds(state, humanSeat) : { toCall: 0, min: 0, max: 0, canRaise: false }, [state]);
@@ -51,8 +45,6 @@ export default function PokerTable() {
   const act = (action: PokerAction) => {
     if (!state || !humanTurn) return;
     setRaiseTo(null);
-    setPriceGuess("");
-    setPriceRevealed(false);
     runEngine(state, action);
   };
 
@@ -72,6 +64,7 @@ export default function PokerTable() {
       setReviewMode(null);
       return;
     }
+    if (event.key === "Escape") setSettingsOpen(false);
     if (modalOpen || paused || busy) return;
     if (humanTurn) {
       if (bounds.canRaise && (key in PRESET_FRACTIONS || key === "a")) {
@@ -117,37 +110,23 @@ export default function PokerTable() {
   const facts = decisionFacts(state, humanSeat);
   const chips = (amount: number) => formatChips(amount, inBB);
   const pastReviews = [...state.reviewArchive, ...(state.status === "playing" ? [] : state.reviews)];
-  const retryItems = practiceQueue(pastReviews);
-  const lockedDuringHand = mode === "play" && state.status === "playing";
   const notice = storageWarning || engineError;
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">R</span><div><strong>River Room</strong><small>Hold’em trainer</small></div></div>
+        <div className="brand"><div><strong>River Room</strong><small>Hold’em trainer</small></div></div>
         <div className="table-meta"><span>6-MAX CASH</span><b>$1 / $2 NL</b><span>100 BB BUY-IN</span></div>
         <div className="header-actions">
-          <button disabled={lockedDuringHand} onClick={() => setChartsOpen(true)}>Preflop charts</button>
-          <button onClick={() => setRulesOpen(true)}>Table rules</button>
-          <button className="log-toggle" onClick={() => setHistoryOpen(!historyOpen)} aria-expanded={historyOpen}>Coach & log</button>
-          <button onClick={() => setResetOpen(true)}>Reset session</button>
+          <button onClick={() => setReviewMode("history")} disabled={pastReviews.length === 0}>Past hands</button>
+          <button className="icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
+          {settingsOpen && <SettingsPopover speed={speed} inBB={inBB} paused={paused} onSpeed={(value) => updatePreferences({ speed: value })} onUnits={() => updatePreferences({ inBB: !inBB })} onPause={() => setPaused(!paused)} onReset={() => { setSettingsOpen(false); setResetOpen(true); }} onClose={() => setSettingsOpen(false)} />}
         </div>
       </header>
 
-      <section className="training-toolbar" aria-label="Training settings">
-        <div className="mode-control">
-          <button aria-pressed={mode === "study"} onClick={() => updatePreferences({ mode: "study" })}>Study table</button>
-          <button aria-pressed={mode === "play"} onClick={() => updatePreferences({ mode: "play" })}>Unassisted play</button>
-        </div>
-        <p>{mode === "study" ? "Think through the spot. Learn after the hand." : "No live coaching or charts. Review after the hand."}</p>
-        <label>Pace <select aria-label="Bot pace" value={speed} onChange={(event) => updatePreferences({ speed: event.target.value === "fast" ? "fast" : "normal" })}><option value="normal">Natural</option><option value="fast">Fast</option></select></label>
-        <button aria-pressed={inBB} onClick={() => updatePreferences({ inBB: !inBB })}>{inBB ? "BB" : "$"} units</button>
-        <button aria-pressed={paused} onClick={() => setPaused(!paused)}>{paused ? "Resume" : "Pause"}</button>
-      </section>
       {notice && <div className="app-notice" role="alert">{notice}{engineError && state.currentActor !== humanSeat && <button onClick={() => runEngine(state)}>Retry</button>}</div>}
       <div className="game-layout">
         <section className="table-zone" aria-label="Poker table">
-          <div className="ambient ambient-one" /><div className="ambient ambient-two" />
           <div className="poker-table">
             <div className="rail"><div className="felt">
               <div className="table-center">
@@ -163,7 +142,7 @@ export default function PokerTable() {
 
           <div className="status-strip" aria-live="polite">
             <div><span className="eyebrow">Current hand</span><strong>{state.status === "playing" ? (paused ? "Table paused" : busy ? "Processing decision…" : humanTurn ? "Action is on you" : `${state.players[state.currentActor]?.name ?? "Dealer"} is thinking`) : state.result}</strong></div>
-            <div className="hero-hand"><span>{mode === "study" && state.board.length >= 3 ? liveHand.name : "Your hole cards"}</span><strong>{hero.hole.map(cardLabel).join(" ")}</strong></div>
+            <div className="hero-hand"><span>{state.board.length >= 3 ? liveHand.name : "Your hole cards"}</span><strong>{hero.hole.map(cardLabel).join(" ")}</strong></div>
           </div>
 
           {state.status === "playing" ? (
@@ -202,41 +181,14 @@ export default function PokerTable() {
           )}
         </section>
 
-        <aside className={`history-panel ${historyOpen ? "open" : ""}`} aria-label="Learning and session">
-          <section className="learning-card">
-            <div className="learning-heading"><span className="eyebrow">Your practice</span><span className="live-dot">{mode === "study" ? "GUIDED" : "UNASSISTED"}</span></div>
-            <h2>{state.status !== "playing" ? "Good decisions compound." : "Range. Price. Purpose."}</h2>
-            {mode === "study" && state.status === "playing" ? <>
-              <p>Which hands reach this spot? What continues if you bet? What changes on the next card?</p>
-              {humanTurn && facts.call > 0 && (
-                <div className="price-practice">
-                  <label htmlFor="price-guess">What equity does this call need?</label>
-                  <div><input id="price-guess" inputMode="decimal" type="number" min="0" max="100" placeholder="Your estimate %" value={priceGuess} onChange={(event) => setPriceGuess(event.target.value)} /><button onClick={() => setPriceRevealed(true)}>Check</button></div>
-                  {priceRevealed && <p role="status"><strong>{(facts.price * 100).toFixed(1)}% before rake.</strong> {facts.call} ÷ ({facts.contestablePot} + {facts.call}). {priceGuess.trim() && Number.isFinite(Number(priceGuess)) ? Math.abs(Number(priceGuess) - facts.price * 100) <= 2 ? "Good estimate. " : "Compare that with your estimate. " : ""}This is the price, not your actual equity. Future bets, rake and equity realization matter.</p>}
-                </div>
-              )}
-            </> : <p>{state.status === "playing" ? "Trust your process. Coaching becomes available when the hand ends." : "Separate the quality of your choices from the cards that came next. Review, then recall the lesson."}</p>}
-            <button className="practice-button" disabled={!retryItems.length || lockedDuringHand} onClick={() => setReviewMode("drill")}>Practice past decisions <span>{retryItems.length || "—"}</span></button>
-            {!retryItems.length && <small>Complete a hand to build your practice queue.</small>}
-          </section>
-          <div className="aside-header"><div><span className="eyebrow">Table feed</span><h2>Hand log</h2></div><button aria-label="Close hand log" className="icon-button mobile-close" onClick={() => setHistoryOpen(false)}>×</button></div>
-          <div className="history-list">
-            {[...state.history].reverse().map((entry, index) => <div className={index === 0 ? "latest" : ""} key={`${state.history.length - index}-${entry}`}><span>{String(state.history.length - index).padStart(2, "0")}</span><p>{entry}</p></div>)}
-          </div>
-          <SessionDashboard state={state} inBB={inBB} net={facts.net} reviewCount={pastReviews.length} historyLocked={lockedDuringHand} onOpenHistory={() => setReviewMode("history")} />
-          <p className="privacy-note">Saved on this device. Opponents never see hidden cards.</p>
-        </aside>
       </div>
       {reviewMode && <ReviewPanel
         key={reviewMode}
-        drill={reviewMode === "drill"}
-        items={reviewMode === "current" ? state.reviews : reviewMode === "drill" ? retryItems : pastReviews.slice(-120).reverse()}
-        title={reviewMode === "current" ? `Hand #${state.handNumber} debrief` : reviewMode === "drill" ? "Make the decision again" : "Learning history"}
+        items={reviewMode === "current" ? state.reviews : pastReviews.slice(-120).reverse()}
+        title={reviewMode === "current" ? `Hand #${state.handNumber} debrief` : "Past hands"}
         onClose={() => setReviewMode(null)}
       />}
       {resetOpen && <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"><div className="review-panel reset-panel"><h2 id="reset-title">Start a fresh session?</h2><p>This resets your bankroll, statistics and saved decision history on this device.</p><div className="review-navigation"><button onClick={() => setResetOpen(false)}>Keep playing</button><button onClick={reset}>Reset session</button></div></div></div>}
-      {rulesOpen && <RulesPanel onClose={() => setRulesOpen(false)} />}
-      {chartsOpen && <PreflopChartsPanel onClose={() => setChartsOpen(false)} />}
     </main>
   );
 }
