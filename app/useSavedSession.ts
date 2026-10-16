@@ -9,7 +9,7 @@ const PREFERENCES_KEY = "riverroom-preferences-v1";
 const SAVE_DELAY_MS = 250;
 
 export type Preferences = { inBB: boolean; speed: "normal" | "fast" };
-const DEFAULT_PREFERENCES: Preferences = { inBB: true, speed: "normal" };
+const DEFAULT_PREFERENCES: Preferences = { inBB: false, speed: "normal" };
 
 function readPreferences(): Preferences {
   try {

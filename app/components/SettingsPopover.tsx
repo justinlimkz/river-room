@@ -30,7 +30,7 @@ export function SettingsPopover({ speed, inBB, paused, onSpeed, onUnits, onPause
   }, [onClose]);
 
   return (
-    <div className="settings-popover" ref={ref} role="group" aria-label="Settings">
+    <div className="settings-popover" ref={ref} role="group" aria-label="Table settings">
       <label>Bot pace
         <select aria-label="Bot pace" value={speed} onChange={(event) => onSpeed(event.target.value === "fast" ? "fast" : "normal")}>
           <option value="normal">Natural</option><option value="fast">Fast</option>

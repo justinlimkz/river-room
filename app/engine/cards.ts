@@ -83,3 +83,23 @@ export function compareScores(a: HandScore, b: HandScore) {
   }
   return 0;
 }
+
+const RANK_PLURALS: Record<number, string> = { 14: "aces", 13: "kings", 12: "queens", 11: "jacks", 10: "tens", 9: "nines", 8: "eights", 7: "sevens", 6: "sixes", 5: "fives", 4: "fours", 3: "threes", 2: "twos", 1: "aces" };
+const RANK_SINGULARS: Record<number, string> = { 14: "ace", 13: "king", 12: "queen", 11: "jack", 10: "ten", 9: "nine", 8: "eight", 7: "seven", 6: "six", 5: "five", 4: "four", 3: "three", 2: "two", 1: "ace" };
+
+/** Plain-language name for the best five-card hand, e.g. "Pair of kings". Needs five or more cards. */
+export function describeHand(cards: Card[]): string {
+  const { score } = evaluateHand(cards);
+  const [category, first, second] = score;
+  switch (category) {
+    case 8: return first === 14 ? "Royal flush" : `Straight flush, ${RANK_SINGULARS[first]} high`;
+    case 7: return `Four ${RANK_PLURALS[first]}`;
+    case 6: return `Full house, ${RANK_PLURALS[first]} full of ${RANK_PLURALS[second]}`;
+    case 5: return `Flush, ${RANK_SINGULARS[first]} high`;
+    case 4: return `Straight, ${RANK_SINGULARS[first]} high`;
+    case 3: return `Three ${RANK_PLURALS[first]}`;
+    case 2: return `Two pair, ${RANK_PLURALS[first]} and ${RANK_PLURALS[second]}`;
+    case 1: return `Pair of ${RANK_PLURALS[first]}`;
+    default: return `${RANK_SINGULARS[first][0].toUpperCase()}${RANK_SINGULARS[first].slice(1)} high`;
+  }
+}

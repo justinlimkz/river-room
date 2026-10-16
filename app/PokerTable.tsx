@@ -2,17 +2,16 @@
 
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import {
-  cardLabel,
-  evaluateHand,
+  describeHand,
   humanSeat,
   legalBounds,
   potTotal,
   startHand,
-  toCallFor,
   type PokerAction,
 } from "./poker-engine";
-import { formatChips } from "./components/format";
-import { PlayingCard } from "./components/PlayingCard";
+import { ActionBar } from "./components/ActionBar";
+import { formatChips, formatNet, resultLine } from "./components/format";
+import { EmptySlot, PlayingCard } from "./components/PlayingCard";
 import { ReviewPanel } from "./components/ReviewPanel";
 import { SeatView } from "./components/SeatView";
 import { SettingsPopover } from "./components/SettingsPopover";
@@ -21,12 +20,13 @@ import { useModalFocus } from "./useModalFocus";
 import { usePokerEngine } from "./usePokerEngine";
 import { useSavedSession } from "./useSavedSession";
 
-const PRESET_FRACTIONS: Record<string, number> = { "5": 0.5, "7": 0.75, p: 1 };
+// Keyboard shortcuts for the size presets.
+const PRESET_FRACTIONS: Record<string, number> = { "5": 1 / 2, "7": 2 / 3, p: 1 };
 
 export default function PokerTable() {
   const { state, setState, preferences, updatePreferences, storageWarning, resetSession } = useSavedSession();
   const { inBB, speed } = preferences;
-  const [raiseTo, setRaiseTo] = useState<string | null>(null);
+  const [raiseTo, setRaiseTo] = useState<number | null>(null);
   const [reviewMode, setReviewMode] = useState<"current" | "history" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -38,9 +38,7 @@ export default function PokerTable() {
 
   const bounds = useMemo(() => state ? legalBounds(state, humanSeat) : { toCall: 0, min: 0, max: 0, canRaise: false }, [state]);
   const humanTurn = state?.status === "playing" && state.currentActor === humanSeat && !busy && !paused && !modalOpen;
-  const raiseInputValue = raiseTo ?? String(bounds.min);
-  const enteredRaise = raiseInputValue.trim() === "" ? Number.NaN : Number(raiseInputValue);
-  const effectiveRaiseTo = Number.isFinite(enteredRaise) ? Math.max(bounds.min, Math.min(bounds.max, Math.round(enteredRaise))) : bounds.min;
+  const effectiveRaiseTo = Math.max(bounds.min, Math.min(bounds.max, Math.round(raiseTo ?? bounds.min)));
 
   const act = (action: PokerAction) => {
     if (!state || !humanTurn) return;
@@ -59,17 +57,17 @@ export default function PokerTable() {
     if (!state || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     if ((event.target as HTMLElement).closest("input, textarea, select, [contenteditable=true]")) return;
     const key = event.key.toLowerCase();
+    if (key === "escape") setSettingsOpen(false);
     if (reviewMode && key === "v") {
       event.preventDefault();
       setReviewMode(null);
       return;
     }
-    if (event.key === "Escape") setSettingsOpen(false);
     if (modalOpen || paused || busy) return;
     if (humanTurn) {
       if (bounds.canRaise && (key in PRESET_FRACTIONS || key === "a")) {
         event.preventDefault();
-        setRaiseTo(String(key === "a" ? bounds.max : potRaiseTarget(state, humanSeat, PRESET_FRACTIONS[key])));
+        setRaiseTo(key === "a" ? bounds.max : potRaiseTarget(state, humanSeat, PRESET_FRACTIONS[key]));
         return;
       }
       if (key === "f") act({ type: "fold" });
@@ -103,92 +101,94 @@ export default function PokerTable() {
     resetSession();
   };
   const hero = state.players[humanSeat];
-  const toCall = toCallFor(state, humanSeat);
   const pot = potTotal(state);
-  const liveHand = evaluateHand([...hero.hole, ...state.board]);
-  const quickRaise = (fraction: number) => potRaiseTarget(state, humanSeat, fraction);
   const facts = decisionFacts(state, humanSeat);
   const chips = (amount: number) => formatChips(amount, inBB);
   const pastReviews = [...state.reviewArchive, ...(state.status === "playing" ? [] : state.reviews)];
   const notice = storageWarning || engineError;
+  const strength = state.board.length >= 3 && !hero.folded ? describeHand([...hero.hole, ...state.board]) : undefined;
+  const presets = [
+    { label: "½ pot", key: "5", value: potRaiseTarget(state, humanSeat, 1 / 2) },
+    { label: "⅔ pot", key: "7", value: potRaiseTarget(state, humanSeat, 2 / 3) },
+    { label: "Pot", key: "p", value: potRaiseTarget(state, humanSeat, 1) },
+    { label: "All-in", key: "a", value: bounds.max },
+  ];
+  const waiting = state.status === "playing" && !humanTurn
+    ? paused ? "Table paused" : `${state.players[state.currentActor]?.name ?? "Dealer"} is thinking…`
+    : "";
+  const net = facts.net;
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand"><div><strong>River Room</strong><small>Hold’em trainer</small></div></div>
-        <div className="table-meta"><span>6-MAX CASH</span><b>$1 / $2 NL</b><span>100 BB BUY-IN</span></div>
+        <strong className="wordmark">River Room</strong>
+        <span className="table-meta mono">No-limit hold’em · $1/$2 · 6-max · Hand {state.handNumber}</span>
         <div className="header-actions">
-          <button onClick={() => setReviewMode("history")} disabled={pastReviews.length === 0}>Past hands</button>
-          <button className="icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
+          <span className="muted">Session</span>
+          <span className={`mono net ${net > 0 ? "up" : net < 0 ? "down" : ""}`}>{formatNet(net, inBB)}</span>
+          <button className="ghost" onClick={() => setReviewMode("history")} disabled={pastReviews.length === 0}>Past hands</button>
+          <button className="ghost icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1" /></svg>
+          </button>
           {settingsOpen && <SettingsPopover speed={speed} inBB={inBB} paused={paused} onSpeed={(value) => updatePreferences({ speed: value })} onUnits={() => updatePreferences({ inBB: !inBB })} onPause={() => setPaused(!paused)} onReset={() => { setSettingsOpen(false); setResetOpen(true); }} onClose={() => setSettingsOpen(false)} />}
         </div>
       </header>
-
       {notice && <div className="app-notice" role="alert">{notice}{engineError && state.currentActor !== humanSeat && <button onClick={() => runEngine(state)}>Retry</button>}</div>}
-      <div className="game-layout">
-        <section className="table-zone" aria-label="Poker table">
-          <div className="poker-table">
-            <div className="rail"><div className="felt">
-              <div className="table-center">
-                <div className="pot-label">TOTAL POT</div><div className="pot-value"><i />{chips(pot)}</div>
-                <div className="community" aria-label="Community cards">
-                  {Array.from({ length: 5 }, (_, index) => state.board[index] ? <PlayingCard card={state.board[index]} key={index} /> : <div className="card empty-card" key={index} />)}
-                </div>
-                <div className="street-line"><span>{state.street.toUpperCase()}</span><i /><span>HAND #{state.handNumber}</span></div>
-              </div>
-            </div></div>
-            {state.players.map((player, index) => <SeatView key={player.id} player={player} index={index} state={state} inBB={inBB} />)}
-          </div>
 
-          <div className="status-strip" aria-live="polite">
-            <div><span className="eyebrow">Current hand</span><strong>{state.status === "playing" ? (paused ? "Table paused" : busy ? "Processing decision…" : humanTurn ? "Action is on you" : `${state.players[state.currentActor]?.name ?? "Dealer"} is thinking`) : state.result}</strong></div>
-            <div className="hero-hand"><span>{state.board.length >= 3 ? liveHand.name : "Your hole cards"}</span><strong>{hero.hole.map(cardLabel).join(" ")}</strong></div>
+      <div className="stage">
+        <section className="table" aria-label="Poker table">
+          <div className="oval" />
+          <div className="table-center">
+            {state.status === "playing" && <div className="pot mono">Pot <b>{chips(pot)}</b></div>}
+            <div className="board" aria-label="Community cards">
+              {Array.from({ length: 5 }, (_, index) => state.board[index] ? <PlayingCard card={state.board[index]} key={index} /> : <EmptySlot key={index} />)}
+            </div>
+            <div className="street-name">{state.status === "playing" ? state.street : "Hand over"}</div>
           </div>
-
-          {state.status === "playing" ? (
-            <section className={`action-dock ${humanTurn ? "ready" : "waiting"}`} aria-label="Poker actions">
-              <div className="decision-context">
-                <span>TO CALL <b>{chips(facts.call)}</b></span>
-                <span title="At the start of this betting round, against the deepest live opponent; shorter opponents have individual effective stacks.">EFFECTIVE <b>{chips(facts.effective)}</b></span>
-                <span>POSITION <b>{hero.position}</b></span>
-              </div>
-              <div className="action-buttons">
-                <button className="fold" disabled={!humanTurn} onClick={() => act({ type: "fold" })}><kbd>F</kbd> Fold</button>
-                <button disabled={!humanTurn} onClick={() => act(toCall ? { type: "call" } : { type: "check" })}><kbd>C</kbd> {toCall ? `Call ${chips(facts.call)}${facts.call === hero.stack ? " · all-in" : ""}` : "Check"}</button>
-                <button className="primary" disabled={!humanTurn || !bounds.canRaise} onClick={() => act({ type: "raise", amount: effectiveRaiseTo })}><kbd>R</kbd> {state.currentBet ? "Raise to" : "Bet"} {chips(effectiveRaiseTo)}</button>
-              </div>
-              <div className="raise-tools">
-                <div className="quick-sizes">
-                  <button aria-keyshortcuts="5" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(0.5)))} title="Set raise to 50% pot (5)"><kbd>5</kbd>50%</button>
-                  <button aria-keyshortcuts="7" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(0.75)))} title="Set raise to 75% pot (7)"><kbd>7</kbd>75%</button>
-                  <button aria-keyshortcuts="P" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(quickRaise(1)))} title="Set a pot-sized raise (P)"><kbd>P</kbd>Pot</button>
-                  <button aria-keyshortcuts="A" disabled={!humanTurn || !bounds.canRaise} onClick={() => setRaiseTo(String(bounds.max))} title="Set raise to all-in (A)"><kbd>A</kbd>All-in</button>
-                </div>
-                <input aria-label="Raise amount" type="range" min={bounds.min} max={Math.max(bounds.min, bounds.max)} value={effectiveRaiseTo} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(event.target.value)} />
-                <label className="raise-input"><span>{state.currentBet ? "Raise to" : "Bet"} ($)</span><input aria-label="Wager target in dollars" type="number" step="1" min={bounds.min} max={bounds.max} value={raiseInputValue} disabled={!humanTurn || !bounds.canRaise} onChange={(event) => setRaiseTo(event.target.value)} onBlur={() => setRaiseTo(String(effectiveRaiseTo))} /></label>
-              </div>
-            </section>
-          ) : (
-            <section className="between-hands">
-              <div><span className="eyebrow">Hand complete</span><h2>{state.result}</h2><p>Your stack: ${hero.stack} · Session: {state.sessionHands} hands</p></div>
-              <div>
-                {state.reviews.length > 0 && <button onClick={() => setReviewMode("current")}><kbd>V</kbd> Review decisions</button>}
-                {state.status === "busted"
-                  ? <button className="primary" onClick={() => setResetOpen(true)}>Reset bankroll</button>
-                  : <button className="primary" onClick={() => setState(startHand(state))}><kbd>N</kbd> Deal next hand</button>}
-              </div>
-            </section>
-          )}
+          {state.players.map((player, index) => <SeatView key={player.id} player={player} index={index} state={state} inBB={inBB} strength={strength} />)}
         </section>
 
+        {state.status === "playing" ? (
+          <div className="action-wrap">
+            <p className="waiting" aria-live="polite">{waiting}</p>
+            <ActionBar
+              enabled={humanTurn}
+              canRaise={bounds.canRaise}
+              facing={bounds.toCall > 0}
+              isBet={state.currentBet > 0}
+              callAmount={facts.call}
+              allInCall={facts.call === hero.stack}
+              min={bounds.min}
+              max={bounds.max}
+              raiseTo={effectiveRaiseTo}
+              presets={presets}
+              inBB={inBB}
+              onRaiseTo={setRaiseTo}
+              onFold={() => act({ type: "fold" })}
+              onCall={() => act(bounds.toCall ? { type: "call" } : { type: "check" })}
+              onRaise={() => act({ type: "raise", amount: effectiveRaiseTo })}
+            />
+          </div>
+        ) : (
+          <section className="hand-over" aria-live="polite">
+            <p>{resultLine(state)}</p>
+            <div>
+              {state.reviews.length > 0 && <button className="ghost" onClick={() => setReviewMode("current")}>Review hand</button>}
+              {state.status === "busted"
+                ? <button className="brass-button" onClick={() => setResetOpen(true)}>Reset bankroll</button>
+                : <button className="brass-button" onClick={() => setState(startHand(state))}>Deal next hand</button>}
+            </div>
+          </section>
+        )}
       </div>
+
       {reviewMode && <ReviewPanel
         key={reviewMode}
         items={reviewMode === "current" ? state.reviews : pastReviews.slice(-120).reverse()}
         title={reviewMode === "current" ? `Hand #${state.handNumber} debrief` : "Past hands"}
         onClose={() => setReviewMode(null)}
       />}
-      {resetOpen && <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"><div className="review-panel reset-panel"><h2 id="reset-title">Start a fresh session?</h2><p>This resets your bankroll, statistics and saved decision history on this device.</p><div className="review-navigation"><button onClick={() => setResetOpen(false)}>Keep playing</button><button onClick={reset}>Reset session</button></div></div></div>}
+      {resetOpen && <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"><div className="review-panel reset-panel"><h2 id="reset-title">Start a fresh session?</h2><p>This resets your bankroll, statistics and saved decision history on this device.</p><div className="review-navigation"><button className="ghost" onClick={() => setResetOpen(false)}>Keep playing</button><button className="brass-button" onClick={reset}>Reset session</button></div></div></div>}
     </main>
   );
 }

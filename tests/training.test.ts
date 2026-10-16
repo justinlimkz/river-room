@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSession, humanSeat, seededRandom } from "../app/poker-engine";
+import { createSession, describeHand, humanSeat, seededRandom, type Card } from "../app/poker-engine";
 import { decisionFacts, potRaiseTarget } from "../app/training";
 
 test("pot-size raises include the call and respect min and max", () => {
@@ -40,4 +40,16 @@ test("short all-in price excludes side-pot chips the player cannot win", () => {
   assert.equal(facts.call, 20);
   assert.equal(facts.contestablePot, 40);
   assert.equal(facts.price, 1 / 3);
+});
+
+test("hand descriptions read as plain language", () => {
+  const hand = (text: string) => text.split(" ").map((c) => ({ rank: c[0], suit: ({ c: "clubs", d: "diamonds", h: "hearts", s: "spades" } as const)[c[1] as "c"] })) as Card[];
+  assert.equal(describeHand(hand("Ks 7d 2s 9h Ac")), "Ace high");
+  assert.equal(describeHand(hand("Ks Kd 2s 9h Ac")), "Pair of kings");
+  assert.equal(describeHand(hand("Ks Kd 2s 2h Ac")), "Two pair, kings and twos");
+  assert.equal(describeHand(hand("Ks Kd Kc 2h Ac")), "Three kings");
+  assert.equal(describeHand(hand("5s 4d 3s 2h Ac")), "Straight, five high");
+  assert.equal(describeHand(hand("Ks 7s 2s 9s Ac")), "Ace high");
+  assert.equal(describeHand(hand("Ks 7s 2s 9s As")), "Flush, ace high");
+  assert.equal(describeHand(hand("Ks Kd Kc 2h 2c")), "Full house, kings full of twos");
 });
