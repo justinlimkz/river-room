@@ -1,5 +1,5 @@
 import { analyzeBoard, classifyStrategicHand } from "./board";
-import { cardLabel, compareScores, evaluateHand, makeDeck, shuffledDeck } from "./cards";
+import { cardLabel, compareScores, evaluateHand, makeDeck, seededRandom, shuffledDeck } from "./cards";
 import { buildBotContext, coachView } from "./context";
 import { buildRangeLedger, opponentRangeWeight, rangeResponseWeight, sampleRangeCombo, weightedHoleSample } from "./ranges";
 import { CASH_RAKE, clockwiseDistance, legalBounds, potTotal, toCallFor, validateAction } from "./rules";
@@ -170,6 +170,9 @@ export function evaluatePostflopActions(
   const streetRealization = state.street === "river" ? 1 : state.street === "turn" ? 0.94 : 0.88;
   const rake = options.rake ?? CASH_RAKE;
   const net = (amount: number) => amount - (coachingEvaluation ? Math.min(rake.cap, Math.round(amount * rake.rate)) : 0);
+  // Coaching compares bet sizes, so each size must be sampled with the same random cards. Independent
+  // samples let noise in "equity when called" outweigh the real difference between $5 and $7.
+  const pairedSeed = coachingEvaluation ? Math.floor(random() * 0x100000000) : 0;
   const candidates = options.actions ?? postflopCandidates(state, seatIndex);
   if (options.extraAction && validateAction(state, seatIndex, options.extraAction).legal && !evaluationForAction(candidates.map(action => ({ action } as ActionEvaluation)), options.extraAction)) candidates.push(options.extraAction);
   return candidates.map((action) => {
@@ -199,7 +202,7 @@ export function evaluatePostflopActions(
       foldProbability = rates.reduce((probability, rate) => probability * rate.fold, 1);
       raiseProbability = 1 - rates.reduce((probability, rate, i) => probability * (1 - (coachingEvaluation && (player.stack + player.streetBet <= effectiveTarget || state.players[context.opponents[i]].stack + state.players[context.opponents[i]].streetBet <= effectiveTarget) ? 0 : rate.raise)), 1);
       const expectedCallers = Math.max(1, rates.reduce((sum, rate) => sum + rate.call, 0));
-      equityWhenCalled = estimateLedgerEquity(state, seatIndex, ledger, Math.max(16, Math.round(iterations * 0.55)), random,
+      equityWhenCalled = estimateLedgerEquity(state, seatIndex, ledger, coachingEvaluation ? Math.max(80, Math.round(iterations * 0.55)) : Math.max(16, Math.round(iterations * 0.55)), coachingEvaluation ? seededRandom(pairedSeed) : random,
         (opponent, combo) => rangeResponseWeight(combo.handClass, "call", fraction, state.street, state.players[opponent].profile) + (coachingEvaluation ? rangeResponseWeight(combo.handClass, "raise", fraction, state.street, state.players[opponent].profile) : 0), coachingEvaluation);
       const opponentCall = Math.max(0, target - state.currentBet);
       const matchedCalls = coachingEvaluation ? context.opponents.reduce((sum, opponent, i) => {

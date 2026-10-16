@@ -215,9 +215,14 @@ function buildPublicReview(state: HandState, action: PokerAction): ReviewItem {
   const closeThreshold = Math.max(1.5, potTotal(state) * 0.045);
   const costlyThreshold = Math.max(4, potTotal(state) * 0.13);
   const intervalsOverlap = chosen.evHigh >= best.evLow;
+  // A bet that earns more than every passive option (check, call, fold) is never a "mistake" just because a
+  // different size is estimated to earn more. Sizing differences stay "Viable".
+  const passiveEv = Math.max(...evaluations.filter((e) => e.action.type === "fold" || e.action.type === "check" || e.action.type === "call").map((e) => e.ev), Number.NEGATIVE_INFINITY);
+  const isBetOrRaise = (e: { action: PokerAction }) => e.action.type === "raise" || e.action.type === "all-in";
+  const sizingOnly = (e: typeof chosen) => !!e && isBetOrRaise(e) && isBetOrRaise(best) && e.ev > passiveEv;
   let grade: ReviewItem["grade"] = chosen === best || regret <= closeThreshold
     ? "Preferred"
-    : regret >= costlyThreshold && !intervalsOverlap ? "Costly" : "Viable";
+    : regret >= costlyThreshold && !intervalsOverlap && !sizingOnly(chosen) ? "Costly" : "Viable";
   const features = handFeatures(state.players[humanSeat].hole, state.board);
   let concept = state.street === "river" && state.currentBet === 0 && features.made === 1 ? "Thin river value"
     : state.currentBet > 0 ? "Price, range and response EV"
@@ -233,7 +238,7 @@ function buildPublicReview(state: HandState, action: PokerAction): ReviewItem {
     const actionRegret = Math.max(0, best.ev - evaluation.ev);
     const overlap = evaluation.evHigh >= best.evLow;
     const verdict: ReviewItem["grade"] = evaluation === best || actionRegret <= closeThreshold ? "Preferred"
-      : actionRegret >= costlyThreshold && !overlap ? "Costly" : "Viable";
+      : actionRegret >= costlyThreshold && !overlap && !sizingOnly(evaluation) ? "Costly" : "Viable";
     const response = evaluation.foldProbability !== undefined
       ? `${Math.round(evaluation.foldProbability * 100)}% estimated immediate folds; ${Math.round((evaluation.equityWhenCalled ?? 0) * 100)}% equity against the modeled calling range.`
       : evaluation.action.type === "fold" ? "Folding invests no additional chips."

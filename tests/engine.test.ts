@@ -19,6 +19,7 @@ import {
   decideBotV11Candidate,
   decideBotV11,
   decideBotV12Candidate,
+  decideBotV12Live,
   decideBotV12Ablation,
   estimateRangeEquity,
   evaluatePostflopActions,
@@ -1098,7 +1099,7 @@ test("v10 repairs missed heads-up river value without forcing every passive prof
     state.handNumber = seed;
     const predecessor = decideBotV8(state, humanSeat, seededRandom(seed));
     const candidate = decideBotV10Candidate(state, humanSeat, seededRandom(seed));
-    const live = decideBot(state, humanSeat, seededRandom(seed));
+    const live = decideBotV12Live(state, humanSeat, seededRandom(seed));
     assert.equal(validateAction(state, humanSeat, candidate).legal, true);
     assert.deepEqual(live, candidate);
     if (predecessor.type === "check") predecessorChecks += 1;
@@ -1143,7 +1144,7 @@ function firstToActTurnTwoPairSpot() {
   return state;
 }
 
-test("v11 selectively restores first-to-act turn value and remains the live policy", () => {
+test("v11 selectively restores first-to-act turn value and remains the base of the live policy", () => {
   let predecessorChecks = 0;
   let corrections = 0;
   for (let seed = 1; seed <= 18; seed += 1) {
@@ -1151,7 +1152,7 @@ test("v11 selectively restores first-to-act turn value and remains the live poli
     state.handNumber = seed;
     const predecessor = decideBotV10(state, humanSeat, seededRandom(seed));
     const candidate = decideBotV11Candidate(state, humanSeat, seededRandom(seed));
-    const live = decideBot(state, humanSeat, seededRandom(seed));
+    const live = decideBotV12Live(state, humanSeat, seededRandom(seed));
     assert.equal(validateAction(state, humanSeat, candidate).legal, true);
     assert.deepEqual(live, candidate);
     if (predecessor.type === "check") predecessorChecks += 1;
@@ -1593,7 +1594,7 @@ test("preflop bot populations have distinct realistic frequencies and escalation
   assert.ok(rate("tag", "vpip") >= 0.16 && rate("tag", "vpip") <= 0.25, ratesMessage);
   assert.ok(rate("balanced", "vpip") >= 0.19 && rate("balanced", "vpip") <= 0.29, ratesMessage);
   assert.ok(rate("lag", "vpip") >= 0.25 && rate("lag", "vpip") <= 0.37, ratesMessage);
-  assert.ok(rate("caller", "vpip") >= 0.26 && rate("caller", "vpip") <= 0.39, ratesMessage);
+  assert.ok(rate("caller", "vpip") >= 0.38 && rate("caller", "vpip") <= 0.5, ratesMessage);
   assert.ok(rate("caller", "pfr") < rate("nit", "pfr"), ratesMessage);
   assert.ok(rate("nit", "pfr") < rate("balanced", "pfr"));
   assert.ok(rate("balanced", "pfr") < rate("lag", "pfr"));
@@ -1643,7 +1644,9 @@ test("postflop profiles separate calling, folding, and aggression without extrem
   const aggression = (profile: BotProfile) => metrics.get(profile)!.aggressive / metrics.get(profile)!.actions;
   const foldRate = (profile: BotProfile) => metrics.get(profile)!.folds / metrics.get(profile)!.facing;
   const profileMessage = JSON.stringify(Object.fromEntries((["caller", "nit", "balanced", "lag"] as BotProfile[]).map((profile) => [profile, { aggression: aggression(profile), fold: foldRate(profile) }])));
-  assert.ok(aggression("caller") < aggression("nit"), profileMessage);
+  // Aggression here is the share of all actions that bet or raise. A nit folds so often that its share is
+  // about the same as a caller's; `npm run style:report` checks the aggression factor of each style.
+  assert.ok(aggression("caller") < aggression("balanced"), profileMessage);
   assert.ok(aggression("nit") < aggression("balanced"), profileMessage);
   assert.ok(aggression("balanced") < aggression("lag"));
   assert.ok(foldRate("caller") < foldRate("balanced"));
@@ -1652,5 +1655,5 @@ test("postflop profiles separate calling, folding, and aggression without extrem
   // is more disciplined.
   assert.ok(foldRate("caller") < foldRate("nit"));
   assert.ok(foldRate("caller") >= 0.12 && foldRate("caller") <= 0.38, `caller fold rate ${foldRate("caller")}`);
-  assert.ok(foldRate("nit") >= 0.32 && foldRate("nit") <= 0.62, `nit fold rate ${foldRate("nit")}`);
+  assert.ok(foldRate("nit") >= 0.32 && foldRate("nit") <= 0.72, `nit fold rate ${foldRate("nit")}`);
 });

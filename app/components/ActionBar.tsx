@@ -25,14 +25,14 @@ export function ActionBar({ enabled, canRaise, facing, isBet, callAmount, allInC
     <section className="action-area" aria-label="Your action">
       <div className="size-row">
         {presets.map((preset) => (
-          <button key={preset.key} className={`size ${preset.value === raiseTo ? "selected" : ""}`} aria-keyshortcuts={preset.key} disabled={!sizing} onClick={() => onRaiseTo(preset.value)}>{preset.label}</button>
+          <button key={preset.key} className={`size ${preset.value === raiseTo ? "selected" : ""}`} aria-keyshortcuts={preset.key} title={`${preset.label} · shortcut ${preset.key.toUpperCase()}`} disabled={!sizing} onClick={() => onRaiseTo(preset.value)}>{preset.label}</button>
         ))}
         <input className="size-slider" aria-label="Raise amount" type="range" min={min} max={Math.max(min, max)} value={raiseTo} disabled={!sizing} onChange={(event) => onRaiseTo(Number(event.target.value))} />
       </div>
       <div className="button-row">
-        <button className="act" disabled={!enabled} onClick={onFold}>Fold</button>
-        <button className="act call" disabled={!enabled} onClick={onCall}>{facing ? `Call ${chips(callAmount)}${allInCall ? " · all-in" : ""}` : "Check"}</button>
-        <button className="act brass" disabled={!sizing} onClick={onRaise}>{isBet ? "Raise to" : "Bet"} {chips(raiseTo)}</button>
+        <button className="act" title="Shortcut F" disabled={!enabled} onClick={onFold}>Fold</button>
+        <button className="act call" title="Shortcut C" disabled={!enabled} onClick={onCall}>{facing ? `Call ${chips(callAmount)}${allInCall ? " · all-in" : ""}` : "Check"}</button>
+        <button className="act brass" title="Shortcut R" disabled={!sizing} onClick={onRaise}>{isBet ? "Raise to" : "Bet"} {chips(raiseTo)}</button>
       </div>
     </section>
   );
