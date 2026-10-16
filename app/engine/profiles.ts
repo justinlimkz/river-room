@@ -1,5 +1,5 @@
 import { VALUES } from "./cards";
-import { type Card, type Position } from "./types";
+import { type BotProfile, type Card, type Position } from "./types";
 
 export const PROFILE = {
   balanced: { openFactor: 1, openRaise: 0.97, continueVsOpen: 0.17, threeBet: 0.075, defendVsThreeBet: 0.075, fourBet: 0.025, continueVsFourBet: 0.021, stackOff: 0.014, preflopAggression: 0.9, postflopAggression: 0.62, postflopContinue: 0.46, betThreshold: 0.58, raiseThreshold: 0.79, bluff: 0.075, callBias: 0 },
@@ -16,3 +16,12 @@ export function bluffCandidate(cards: Card[]) {
   const suited = cards[0].suit === cards[1].suit;
   return (suited && values[0] === 14 && values[1] <= 5) || (suited && values[0] >= 11 && values[1] >= 9);
 }
+
+/** The public one-line description of each opponent's style. Shown to the player; never read by the bots or the coach. */
+export const STYLE_LABELS: Record<BotProfile, string> = {
+  balanced: "Balanced",
+  tag: "Tight, aggressive",
+  lag: "Loose, aggressive",
+  nit: "Very tight",
+  caller: "Calls too much",
+};

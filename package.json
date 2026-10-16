@@ -16,7 +16,7 @@
     "benchmark:coach": "node --import tsx scripts/validate-coach.ts",
     "benchmark:coach:strict": "node --import tsx scripts/validate-coach.ts --strict-strategy",
     "typecheck": "tsc --noEmit",
-    "test:unit": "node --import tsx --test tests/engine.test.ts tests/training.test.ts tests/poker-worker.test.ts tests/coach-validation.test.ts"
+    "test:unit": "node --import tsx --test tests/engine.test.ts tests/training.test.ts tests/explain.test.ts tests/poker-worker.test.ts tests/coach-validation.test.ts"
   },
   "dependencies": {
     "react": "19.2.6",

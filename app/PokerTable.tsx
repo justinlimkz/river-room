@@ -12,10 +12,11 @@ import {
 import { ActionBar } from "./components/ActionBar";
 import { formatChips, formatNet, resultLine } from "./components/format";
 import { EmptySlot, PlayingCard } from "./components/PlayingCard";
-import { ReviewPanel } from "./components/ReviewPanel";
+import { ReviewPage } from "./components/ReviewPage";
 import { SeatView } from "./components/SeatView";
 import { SettingsPopover } from "./components/SettingsPopover";
 import { decisionFacts, potRaiseTarget } from "./training";
+import { useHandStart } from "./useHandStart";
 import { useModalFocus } from "./useModalFocus";
 import { usePokerEngine } from "./usePokerEngine";
 import { useSavedSession } from "./useSavedSession";
@@ -28,17 +29,23 @@ export default function PokerTable() {
   const { inBB, speed } = preferences;
   const [raiseTo, setRaiseTo] = useState<number | null>(null);
   const [reviewMode, setReviewMode] = useState<"current" | "history" | null>(null);
+  const handStartStack = useHandStart(state);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paused, setPaused] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const { run: runEngine, cancel: cancelEngine, busy, error: engineError } = usePokerEngine(setState);
+  // The review is a full page, not a dialog, but the table stays paused while it is open.
   const modalOpen = Boolean(reviewMode || resetOpen);
-  const closeModals = () => { setReviewMode(null); setResetOpen(false); };
-  useModalFocus(modalOpen, closeModals);
+  useModalFocus(resetOpen, () => setResetOpen(false));
 
   const bounds = useMemo(() => state ? legalBounds(state, humanSeat) : { toCall: 0, min: 0, max: 0, canRaise: false }, [state]);
   const humanTurn = state?.status === "playing" && state.currentActor === humanSeat && !busy && !paused && !modalOpen;
   const effectiveRaiseTo = Math.max(bounds.min, Math.min(bounds.max, Math.round(raiseTo ?? bounds.min)));
+
+  const dealNext = () => {
+    setReviewMode(null);
+    setState((current) => current?.status === "handOver" ? startHand(current) : current);
+  };
 
   const act = (action: PokerAction) => {
     if (!state || !humanTurn) return;
@@ -58,9 +65,15 @@ export default function PokerTable() {
     if ((event.target as HTMLElement).closest("input, textarea, select, [contenteditable=true]")) return;
     const key = event.key.toLowerCase();
     if (key === "escape") setSettingsOpen(false);
-    if (reviewMode && key === "v") {
-      event.preventDefault();
-      setReviewMode(null);
+    if (reviewMode) {
+      if (key === "v" || key === "escape") {
+        event.preventDefault();
+        setReviewMode(null);
+      }
+      if (key === "n" && state.status === "handOver") {
+        event.preventDefault();
+        dealNext();
+      }
       return;
     }
     if (modalOpen || paused || busy) return;
@@ -82,7 +95,7 @@ export default function PokerTable() {
     }
     if (key === "n") {
       event.preventDefault();
-      setState((current) => current?.status === "handOver" ? startHand(current) : current);
+      dealNext();
     }
   });
   useEffect(() => {
@@ -104,7 +117,6 @@ export default function PokerTable() {
   const pot = potTotal(state);
   const facts = decisionFacts(state, humanSeat);
   const chips = (amount: number) => formatChips(amount, inBB);
-  const pastReviews = [...state.reviewArchive, ...(state.status === "playing" ? [] : state.reviews)];
   const notice = storageWarning || engineError;
   const strength = state.board.length >= 3 && !hero.folded ? describeHand([...hero.hole, ...state.board]) : undefined;
   const presets = [
@@ -118,6 +130,10 @@ export default function PokerTable() {
     : "";
   const net = facts.net;
 
+  if (reviewMode && !resetOpen) {
+    return <ReviewPage state={state} initial={reviewMode === "history" ? "list" : "hand"} handStartStack={handStartStack} onBack={() => setReviewMode(null)} onDeal={state.status === "handOver" ? dealNext : undefined} />;
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -126,7 +142,7 @@ export default function PokerTable() {
         <div className="header-actions">
           <span className="muted">Session</span>
           <span className={`mono net ${net > 0 ? "up" : net < 0 ? "down" : ""}`}>{formatNet(net, inBB)}</span>
-          <button className="ghost" onClick={() => setReviewMode("history")} disabled={pastReviews.length === 0}>Past hands</button>
+          <button className="ghost" onClick={() => setReviewMode("history")} disabled={state.reviewArchive.length === 0}>Past hands</button>
           <button className="ghost icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1" /></svg>
           </button>
@@ -176,19 +192,13 @@ export default function PokerTable() {
               {state.reviews.length > 0 && <button className="ghost" onClick={() => setReviewMode("current")}>Review hand</button>}
               {state.status === "busted"
                 ? <button className="brass-button" onClick={() => setResetOpen(true)}>Reset bankroll</button>
-                : <button className="brass-button" onClick={() => setState(startHand(state))}>Deal next hand</button>}
+                : <button className="brass-button" onClick={dealNext}>Deal next hand</button>}
             </div>
           </section>
         )}
       </div>
 
-      {reviewMode && <ReviewPanel
-        key={reviewMode}
-        items={reviewMode === "current" ? state.reviews : pastReviews.slice(-120).reverse()}
-        title={reviewMode === "current" ? `Hand #${state.handNumber} debrief` : "Past hands"}
-        onClose={() => setReviewMode(null)}
-      />}
-      {resetOpen && <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"><div className="review-panel reset-panel"><h2 id="reset-title">Start a fresh session?</h2><p>This resets your bankroll, statistics and saved decision history on this device.</p><div className="review-navigation"><button className="ghost" onClick={() => setResetOpen(false)}>Keep playing</button><button className="brass-button" onClick={reset}>Reset session</button></div></div></div>}
+      {resetOpen && <div className="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="reset-title"><div className="dialog"><h2 id="reset-title">Start a fresh session?</h2><p>This resets your bankroll, statistics and saved decision history on this device.</p><div className="dialog-actions"><button className="ghost" onClick={() => setResetOpen(false)}>Keep playing</button><button className="brass-button" onClick={reset}>Reset session</button></div></div></div>}
     </main>
   );
 }

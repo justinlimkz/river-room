@@ -1,4 +1,4 @@
-import type { BotProfile, HandState } from "../poker-engine";
+import type { HandState } from "../poker-engine";
 
 /** Table amounts are whole dollars at $1/$2; big-blind units divide by two. */
 export function formatChips(amount: number, inBB: boolean) {
@@ -10,15 +10,6 @@ export function formatNet(amount: number, inBB: boolean) {
   if (amount === 0) return formatChips(0, inBB);
   return `${amount > 0 ? "+" : "−"}${formatChips(Math.abs(amount), inBB)}`;
 }
-
-/** The public one-line description of each opponent's style, shown at the table. */
-export const STYLE_LABELS: Record<BotProfile, string> = {
-  balanced: "Balanced",
-  tag: "Tight, aggressive",
-  lag: "Loose, aggressive",
-  nit: "Very tight",
-  caller: "Calls too much",
-};
 
 /** A short reading of the result line: "Theo · One pair · $59 awarded" becomes "Theo wins $59 with one pair". */
 export function resultLine(state: HandState) {

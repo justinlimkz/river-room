@@ -11,5 +11,5 @@ A locally run six-max $1/$2 no-limit Hold'em practice table with heuristic bots 
 - Settlement logic exists in two places: `rules.ts` (`awardUncontested`, `showdown`) and the coach's `terminalRiverEV` in `evaluation.ts`. Change them together.
 - Bots must only see `botView`; the coach must only see `coachView`. No hidden cards, styles or deck.
 - Bot policy changes follow the promotion gate: add a candidate layer, compare it with the frozen baseline (`npm run benchmark:bot`, `npm run audit:postflop`), and only then route `decideBot` through it.
-- Every recommendation stays labelled "Unvalidated strategy". Don't claim GTO, calibration or skill transfer that the benchmarks don't show. `app/coach-validation.json` must match `npm run benchmark:coach` output.
+- The review page carries one quiet footnote: "Evaluations come from River Room's built-in model, not a solver." Don't claim GTO, solver accuracy, calibration or skill transfer that the benchmarks don't show. Review prose comes from `app/engine/explain.ts` and never prints EV bands, "modeled" or `basis` text. `app/coach-validation.json` must match `npm run benchmark:coach` output.
 - Saved sessions are `HandState` version 9 in local storage. Schema changes need a version bump and a `migrateSavedState` path, with a migration test.

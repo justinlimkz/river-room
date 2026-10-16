@@ -1,5 +1,5 @@
-import type { HandState, Seat } from "../poker-engine";
-import { formatChips, STYLE_LABELS } from "./format";
+import { STYLE_LABELS, type HandState, type Seat } from "../poker-engine";
+import { formatChips } from "./format";
 import { PlayingCard } from "./PlayingCard";
 
 // Opponents sit clockwise from the player's seat at the bottom: seat 0 is bottom-left.
