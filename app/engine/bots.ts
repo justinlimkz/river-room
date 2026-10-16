@@ -2,7 +2,7 @@ import { boardWetness, classifyStrategicHand, handFeatures } from "./board";
 import { VALUES, cardLabel } from "./cards";
 import { actsAfterPostflop, botView, buildBotContext } from "./context";
 import { estimateRangeEquityV7, evaluatePostflopActions } from "./evaluation";
-import { DEEP_OPEN_RANGES, analyzePreflopSpot, preflopStrength } from "./preflop";
+import { DEEP_OPEN_RANGES, analyzePreflopSpot, preflopStrength, startingHandKey } from "./preflop";
 import { POSITION_OPEN_RATE, PROFILE, bluffCandidate } from "./profiles";
 import { analyzeFlopStrategy } from "./ranges";
 import { legalBounds, potTotal } from "./rules";
@@ -602,8 +602,149 @@ function decideBotV9FromPublicState(state: HandState, seatIndex: number, random:
   return baseline;
 }
 
-function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+function decideBotV12LiveFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
   return state.street === "preflop" ? decideBotV9FromPublicState(state, seatIndex, random) : decideBotV12FromPublicState(state, seatIndex, random);
+}
+
+/** The live policy before the style layer: the baseline that balanced and tight-aggressive play must not fall below. */
+export function decideBotV12Live(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {
+  const publicState = botView(state, seatIndex);
+  return decideBotV12LiveFromPublicState(publicState, seatIndex, random);
+}
+
+// ---------------------------------------------------------------------------
+// Style layer (V13). Each opponent has a few readable habits that sit on top of
+// the V12 policy. Balanced and tight-aggressive only gain chart-backed hands;
+// the loose, tight and calling styles are meant to be exploitable, so they are
+// judged by the bands in `npm run style:report`, not by the promotion gate.
+// ---------------------------------------------------------------------------
+
+type PreflopHabits = {
+  /** Hands just outside the position chart that V12 folds in an unopened pot, opened anyway. */
+  openWiden: number;
+  /** Unopened pot, hands V12 folds: limp or call instead. */
+  limp: number;
+  /** Facing one raise, hands V12 folds: call instead. */
+  defend: number;
+  /** Facing one raise, hands V12 only calls or folds: three-bet instead. */
+  lightThreeBet: number;
+};
+
+const PREFLOP_HABITS: Record<BotProfile, PreflopHabits> = {
+  balanced: { openWiden: 1, limp: 0, defend: 0, lightThreeBet: 0 },
+  tag: { openWiden: 1, limp: 0, defend: 0, lightThreeBet: 0 },
+  lag: { openWiden: 0.32, limp: 0, defend: 0.2, lightThreeBet: 0.045 },
+  nit: { openWiden: 0, limp: 0, defend: 0, lightThreeBet: 0 },
+  caller: { openWiden: 0, limp: 0.35, defend: 0.45, lightThreeBet: 0 },
+};
+
+/** Styles that stay close to the book open extra hands only from the cutoff and button, where it costs least. */
+const LATE_POSITION_ONLY = new Set<BotProfile>(["balanced", "tag"]);
+
+/** Hands below this percentile are never played just for style. */
+const STYLE_FLOOR: Record<BotProfile, number> = { balanced: 0.35, tag: 0.45, lag: 0.38, nit: 0.8, caller: 0.3 };
+
+function stylePreflop(state: HandState, seatIndex: number, baseline: PokerAction): PokerAction {
+  const player = state.players[seatIndex];
+  const habits = PREFLOP_HABITS[player.profile];
+  const bounds = legalBounds(state, seatIndex);
+  const strength = preflopStrength(player.hole);
+  const key = startingHandKey(player.hole);
+  const mix = (salt: string) => stableDecisionMix(state, seatIndex, `v13-${salt}`);
+  const passive: PokerAction = bounds.toCall > 0 ? { type: "call" } : { type: "check" };
+  const folded = baseline.type === "fold" || (baseline.type === "check" && bounds.toCall > 0);
+  const limpers = buildBotContext(state, seatIndex).limpers;
+
+  if (state.raiseCount === 0) {
+    if (!bounds.canRaise && !folded) return baseline;
+    const inChart = DEEP_OPEN_RANGES[player.position].has(key);
+    const lateEnough = !LATE_POSITION_ONLY.has(player.profile) || ["CO", "BTN", "BTN/SB"].includes(player.position);
+    if (baseline.type === "fold" && bounds.canRaise && limpers === 0 && !inChart && lateEnough && strength >= STYLE_FLOOR[player.profile] && mix("widen") < habits.openWiden) {
+      return contextualPreflopRaise(state, seatIndex);
+    }
+    if (baseline.type === "fold" && strength >= STYLE_FLOOR[player.profile] && mix("limp") < habits.limp) return passive;
+    return baseline;
+  }
+
+  if (state.raiseCount === 1) {
+    if (baseline.type !== "raise" && bounds.canRaise && strength >= STYLE_FLOOR[player.profile] && mix("3bet") < habits.lightThreeBet) return contextualPreflopRaise(state, seatIndex);
+    if (baseline.type === "fold" && strength >= STYLE_FLOOR[player.profile] && mix("defend") < habits.defend) return passive;
+  }
+  return baseline;
+}
+
+/** The last community card is a scare card when it is a new overcard or completes a flush. */
+function isScareCard(board: Card[]) {
+  const last = board.at(-1);
+  if (!last || board.length < 4) return false;
+  const earlier = board.slice(0, -1);
+  const overcard = VALUES[last.rank] > Math.max(...earlier.map((card) => VALUES[card.rank]));
+  const flushCompleting = earlier.filter((card) => card.suit === last.suit).length === 2;
+  return overcard || flushCompleting;
+}
+
+function styleBetFraction(state: HandState, seatIndex: number, fraction: number): PokerAction {
+  const bounds = legalBounds(state, seatIndex);
+  const pot = potTotal(state);
+  const target = Math.max(bounds.min, Math.min(bounds.max, Math.round(state.currentBet + pot * fraction)));
+  return target >= bounds.max ? { type: "all-in" } : { type: "raise", amount: target };
+}
+
+function stylePostflop(state: HandState, seatIndex: number, baseline: PokerAction): PokerAction {
+  const player = state.players[seatIndex];
+  const bounds = legalBounds(state, seatIndex);
+  const context = buildBotContext(state, seatIndex);
+  const features = handFeatures(player.hole, state.board);
+  const handClass = classifyStrategicHand(player.hole, state.board);
+  const strong = handClass === "nuts" || handClass === "strong-value" || features.made >= 3 || (features.made === 2 && features.madeWithHole);
+  const aggressive = baseline.type === "raise" || baseline.type === "all-in";
+  const facingBet = bounds.toCall > 0;
+  const mix = (salt: string) => stableDecisionMix(state, seatIndex, `v13-${salt}`);
+  const mine = state.actionLog.filter((entry) => entry.seat === seatIndex && entry.street !== "preflop");
+  const priorStreet: Street | null = state.street === "turn" ? "flop" : state.street === "river" ? "turn" : null;
+  const betLastStreet = priorStreet !== null && mine.some((entry) => entry.street === priorStreet && entry.type === "raise");
+  const calledEarlierStreet = mine.some((entry) => entry.street !== state.street && entry.type === "call");
+
+  switch (player.profile) {
+    case "caller": {
+      // Rarely lets go of a pair or ace high, however big the bet.
+      const aceHigh = player.hole.some((card) => card.rank === "A");
+      if (baseline.type === "fold" && (features.madeWithHole || aceHigh) && mix("sticky") < 0.6) return { type: "call" };
+      // The occasional small bet when it has a pair, but never a bluff.
+      if (!facingBet && baseline.type === "check" && bounds.canRaise && features.madeWithHole && mix("small-bet") < 0.12) return styleBetFraction(state, seatIndex, 0.5);
+      return baseline;
+    }
+    case "nit": {
+      // Gives up on a second barrel without a strong hand, and only raises with one.
+      if (facingBet && !strong && calledEarlierStreet && state.street !== "flop" && baseline.type !== "fold" && mix("give-up") < 0.85) return { type: "fold" };
+      if (aggressive && !strong && mix("raise-only-strong") < 0.8) return facingBet ? { type: "call" } : { type: "check" };
+      return baseline;
+    }
+    case "lag": {
+      // Fires again when the turn or river is a scare card.
+      if (!facingBet && baseline.type === "check" && bounds.canRaise && betLastStreet && isScareCard(state.board) && context.activePlayers <= 3 && mix("barrel") < 0.6) {
+        return styleBetFraction(state, seatIndex, 0.66);
+      }
+      return baseline;
+    }
+    case "tag": {
+      // Leads small with a medium-strength hand rather than checking it.
+      if (!facingBet && baseline.type === "check" && bounds.canRaise && features.madeWithHole && !strong && context.activePlayers === 2 && mix("small-lead") < 0.15) {
+        return styleBetFraction(state, seatIndex, 0.33);
+      }
+      return baseline;
+    }
+    default:
+      return baseline;
+  }
+}
+
+function styleAction(state: HandState, seatIndex: number, baseline: PokerAction): PokerAction {
+  return state.street === "preflop" ? stylePreflop(state, seatIndex, baseline) : stylePostflop(state, seatIndex, baseline);
+}
+
+function decideBotFromPublicState(state: HandState, seatIndex: number, random: () => number): PokerAction {
+  return styleAction(state, seatIndex, decideBotV12LiveFromPublicState(state, seatIndex, random));
 }
 
 export function decideBot(state: HandState, seatIndex: number, random: () => number = Math.random): PokerAction {

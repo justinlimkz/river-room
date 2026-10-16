@@ -1,7 +1,7 @@
 import { applyAction, createSession, decideBot, humanSeat, seededRandom, startHand, type BotProfile, type HandState } from "../app/poker-engine";
 
 // Bots-only self-play with a bot in the human seat. Prints how each style actually plays.
-// usage: npm run style:report -- --hands=5000 --seed=1 [--preflop-only]
+// usage: npm run style:report -- --hands=5000 --seed=1 [--preflop-only] [--json]
 
 export type StyleRow = {
   seat: number;
@@ -70,6 +70,9 @@ if (isMain) {
   const hands = arg("hands", 5000);
   const started = Date.now();
   const rows = runStyleReport(hands, arg("seed", 1), process.argv.includes("--preflop-only"));
-  console.log(formatStyleReport(rows));
-  console.log(`\n${hands} hands in ${((Date.now() - started) / 1000).toFixed(0)}s`);
+  if (process.argv.includes("--json")) console.log(JSON.stringify(rows));
+  else {
+    console.log(formatStyleReport(rows));
+    console.log(`\n${hands} hands in ${((Date.now() - started) / 1000).toFixed(0)}s`);
+  }
 }
