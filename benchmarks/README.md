@@ -45,3 +45,22 @@ The initial report has 16 decisions and 10 independent terminal comparisons. Str
 Preflop, flop/turn continuation, broad/multiway ranges, raked equilibrium strategies, public-stat range calibration, exploitability of the full bot policy, and human learning transfer are not covered. All live advice is marked **Unvalidated strategy**. Existing saved reviews retain a legacy warning because their estimates have not been recomputed.
 
 For broader validation, obtain independent full-context solves with weighted ranges, stacks, rake, position, board and complete legal betting trees. Freeze separate families as holdouts before policy development. Unsupported configurations must remain excluded, never guessed or silently converted. Human transfer requires separate unassisted, unseen assessments and delayed retention checks; winning more against these bots is insufficient evidence.
+
+## Bot policy checks
+
+The live bot policy is the frozen V12 policy plus a style layer (V13) in `app/engine/bots.ts`. Earlier layers (V8, V10, V11, V12) stay frozen so every change is measured against a fixed boundary.
+
+```sh
+npm run style:report -- --hands=5000 --seed=1   # VPIP, PFR, 3-bet, aggression factor, showdown rate and win rate per seat
+npm run test:style                              # every opponent inside its advertised band (five runs of 1,000 hands)
+npm run benchmark:bot                           # style gate: balanced and tight-aggressive versus frozen V12
+npm run audit:postflop                          # postflop paired audit
+```
+
+`style:report` plays seeded bots-only self-play with a bot in the player seat. Add `--preflop-only` for a fast preflop check. The bands are shown to the player, so a change to a style's habits has to keep it inside them.
+
+`benchmark:bot --gate=style` plays paired duplicate deals with the live policy and frozen V12 swapped between seats. Only balanced and tight-aggressive seats use the live policy; every other seat stays on V12 in both arms, so the result isolates what the style layer does to those two styles. Loose-aggressive, very tight and calling-station styles are meant to be exploitable and are judged by the style bands instead. Widening Mara to her advertised 22-27% VPIP costs about 1.3 bb/100 (95% interval -2.4 to -0.2 over 6,000 paired deals), so the gate is a non-inferiority test that allows up to 3 bb/100.
+
+## Coach evaluation in the app
+
+The review shows one footnote: evaluations come from River Room's built-in model, not a solver. The coach receives an explicit public snapshot with no hidden opponent cards, deck or bot-profile values. It prices terminal river payouts exactly, includes rake, handles short calls, refunds, side-pot eligibility and odd chips, and evaluates the actual bet size. Bet sizes are sampled with the same random cards so neighbouring sizes compare fairly. Run `npm run benchmark:coach` for the public CFR+ reference comparisons and `npm run benchmark:coach:strict` for the stricter strategy gate (currently fails).

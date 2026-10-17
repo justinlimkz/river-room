@@ -1,64 +1,38 @@
 # River Room
 
-A private, six-seat no-limit Hold’em practice table. Training chips only. See [RULES.md](RULES.md) for betting, side pots, rake, and supported cash-game rules.
+A six-max $1/$2 no-limit hold'em practice table that runs locally. You play against five bots that each have a different style, then read a plain-language review of every decision you made. Training chips only; nothing is saved off your device.
 
-## Practice loop
+<!-- Screenshot: add docs/table.png and docs/review.png, then embed them here. -->
+![River Room screenshot (placeholder)](docs/table.png)
 
-- **Study table:** position and effective-stack context, optional pot-odds estimation, and reference charts. Finish the hand before reading the decision coach.
-- **Unassisted play:** live charts and coaching are unavailable; review becomes available after the hand. This is a practice setting, not a locked exam.
-- **Review:** inspect one decision at a time, including the information available before acting, alternative lines, and model uncertainty.
-- **Recall:** retry up to 20 recent decisions, prioritizing costly choices. Recommendations and the original action remain hidden until you choose. This is recall of historical spots, not a solver or a counterfactual replay.
+## Run it
 
-The coach and opponents use heuristic range models. Grades, equity estimates, and modeled regret are diagnostic suggestions, not validated GTO results or a measure of human poker skill. Bot win rates in self-play do not establish strength against online players. Short session profit is not a learning score.
-
-## Controls and persistence
-
-Use dollars or big blinds for table amounts; the editable wager target is always explicitly in dollars. Fractional-pot raises include the call before calculating the raise. Chips beside seats show this street’s wager; the total pot includes all streets.
-
-`F`: fold; `C`: check/call; `R`: submit wager; `5`/`7`/`P`/`A`: 50%/75%/pot/all-in presets. `N`: next hand; `V`: review/back; `Escape`: close dialogs. Input fields and open dialogs prevent game shortcuts. Pause and natural/fast bot pacing are available. A decision already being processed can finish while paused; the following action waits.
-
-Sessions and preferences live in this browser’s local storage. Existing v9 saves are retained; older supported versions migrate through the existing engine. Storage failures show a visible warning. Reset requires confirmation and clears the session’s learning history. No account sync or real-money integration is provided.
-
-## Development and checks
-
-Requires Node.js 22.13+ and the dependencies in `package-lock.json`.
+Requires Node.js 22.13 or newer.
 
 ```sh
 npm install
 npm run dev        # http://localhost:3000
-npm run test:unit  # engine, training-math, worker and coach tests (~1 min)
-npm test           # production build, server render, unit tests, coach benchmark
-npm run typecheck
-npm run lint
 ```
 
-`npm run benchmark:bot` and `npm run audit:postflop` run the paired bot-policy comparisons; they are slow and do not exercise the UI.
+During a hand: `F` fold, `C` check or call, `R` bet or raise, `5` / `7` / `P` / `A` for ½ pot, ⅔ pot, pot and all-in. After a hand: `N` deal the next hand, `V` open or close the review. The settings menu (gear icon) lists these, and holds pace, dollars or big blinds, pause and reset. The session is stored in your browser's local storage.
 
-### Code map
+```sh
+npm run typecheck && npm run lint
+npm run test:unit    # engine, review prose, worker and coach tests
+npm test             # production build, server render, unit tests, style bands, coach benchmark
+```
 
-- `app/poker-engine.ts`: public entry point that re-exports `app/engine/*`. Modules are layered so lower ones never import higher ones:
-  - `types.ts`, `cards.ts` (deck, RNG, hand evaluator)
-  - `rules.ts`: house rules, betting, side pots, rake and showdown (`applyTableAction`, no coaching)
-  - `board.ts`, `profiles.ts`, `context.ts`: board texture and hand classes, bot style constants, public decision context, `coachView` and `botView`
-  - `preflop.ts`: ranges, charts and preflop plans
-  - `ranges.ts`, `evaluation.ts`: public-action range ledgers, equity and action-EV estimates
-  - `bots.ts`: bot policies. Live play is V9 preflop and V12 → V11 → V10 → candidate → V7 postflop. The frozen `decideBotV8/V10/V11` exports are the baselines that new candidates must beat.
-  - `coach.ts`: decision reviews and training-leak accounting
-  - `game.ts`: `applyAction`, which applies the rules and records the coach's review when the learner acts
-  - `persistence.ts`: save validation and migration
-- `app/training.ts`: pot-size targets, contestable calling price, effective stacks and recall ordering.
-- `app/poker.worker.ts` / `app/usePokerEngine.ts`: background decisions and coaching, a duplicate-request guard, stale-result cancellation, and timeout recovery. A failed worker is restarted on the next request, falling back to the main thread after repeated failures.
-- `app/useSavedSession.ts`: local-storage session and preferences. Saves are debounced and flushed on page hide. An unreadable save is backed up to `riverroom-session-unreadable` before a new table opens.
-- `app/PokerTable.tsx`, `app/components/*`, `app/globals.css`: the table, learning views, controls and accessible dialogs.
+## How the opponents and the review work
 
-Bots decide from `botView`: the public state plus their own cards and style. Opponents' cards and styles, the deck and learner history are removed. The coach uses `coachView`, which also hides every bot's style.
+**Opponents.** Each seat plays one of five styles, shown under the player's name: Mara is balanced, Theo is tight and aggressive, June is loose and aggressive, Silas is very tight, and Niko calls too much. Every style sits on the same base policy and adds a few readable habits, such as June firing again on scare cards or Silas folding to a second bet without a strong hand. `npm run style:report` plays thousands of bots-only hands and prints how each one actually plays, and `npm run test:style` fails if any style drifts outside its advertised bands. Bots only ever see their own cards and public information.
 
-## Running locally
+**Review.** After a hand, every decision you made is evaluated. The coach estimates your equity against the hands each opponent plausibly holds, compares the legal options by expected value, and `app/engine/explain.ts` turns that into a verdict, a short explanation and a ranked list of options. Opponents' cards are shown after the hand, but never change the grade: a decision is judged on what you could know. The evaluations come from River Room's built-in model, not a solver.
 
-River Room runs locally only; there is no hosted deployment. `npm run dev` serves it at http://localhost:3000 with hot reload. `npm run build && npm start` serves the production build through a local Workers runtime (Miniflare).
+Details for contributors: [RULES.md](RULES.md) covers the supported game (blinds, rake, side pots), [CLAUDE.md](CLAUDE.md) holds the maintenance conventions, and [benchmarks/README.md](benchmarks/README.md) covers the bot gate, style report and coach validation.
 
-### Coach validation and private information
+## Code map
 
-The `public-coach-v2` update fixes terminal river payout EV, incorporates rake into coaching estimates, handles short calls/refunds/side-pot eligibility and odd chips, and evaluates the actual custom bet size. The coach receives an explicit public snapshot with no hidden opponent cards, deck or bot-profile values. Opponents retain their own policies.
-
-Every recommendation is marked **Unvalidated strategy**; old saved reviews show a legacy warning. Heuristic EV bands are not confidence intervals, and preflop grades no longer invent a dollar cost. Run `npm run benchmark:coach` for the independent public CFR+ reference comparisons, or `npm run benchmark:coach:strict` for the deliberately stricter strategy gate (currently fails). See [benchmark provenance, results and limitations](benchmarks/README.md).
+- `app/poker-engine.ts` re-exports `app/engine/*`, layered so lower modules never import higher ones: `types` → `cards` → `rules` → `board`, `profiles`, `context` → `preflop` → `ranges` → `evaluation` → `bots` → `coach` → `game`, with `persistence` beside `rules`. `explain` and `timeline` only read finished hands and reviews.
+- `app/PokerTable.tsx`, `app/components/*`, `app/globals.css`: the table, the review page and the settings menu.
+- `app/poker.worker.ts`, `app/usePokerEngine.ts`: bot decisions and coaching run in a worker, with timeout recovery.
+- `app/useSavedSession.ts`: debounced local-storage saves (`HandState` version 9) and preferences.
