@@ -1,13 +1,23 @@
 # River Room
 
-A six-max $1/$2 no-limit hold'em practice table that runs locally. You play against five bots that each have a different style, then read a plain-language review of every decision you made. Training chips only; nothing is saved off your device.
+A six-max $1/$2 no-limit hold'em practice table. The main way to play is a private Claude artifact (a single HTML page built from this repo); it also runs locally. You play against five bots that each have a different style, then read a plain-language review of every decision you made. Training chips only; sessions are saved in your browser.
 
 <!-- Screenshot: add docs/table.png and docs/review.png, then embed them here. -->
 ![River Room screenshot (placeholder)](docs/table.png)
 
-## Run it
+## Play it
 
-Requires Node.js 22.13 or newer.
+The artifact is the main way to play. After changing the app, rebuild and republish it:
+
+```sh
+npm run build:artifact   # writes dist/artifact/river-room.html, one self-contained page
+```
+
+Then publish that file to the existing artifact so the link stays the same.
+
+## Run it locally
+
+Requires Node.js 22.13 or newer. Use this for development.
 
 ```sh
 npm install

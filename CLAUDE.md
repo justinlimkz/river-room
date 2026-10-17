@@ -1,12 +1,13 @@
 # River Room: maintenance notes
 
-A locally run six-max $1/$2 no-limit Hold'em practice table with heuristic bots and a post-hand decision coach. See README.md for the code map and RULES.md for the supported game. Earlier history (built with Codex) is in git; the original checkout is `~/Documents/Codex/2026-08-06/i-d`.
+A six-max $1/$2 no-limit Hold'em practice table with heuristic bots and a post-hand decision coach. The main way to play is a private Claude artifact, a single HTML page built by `npm run build:artifact` (React, engine and worker bundled; see `scripts/build-artifact.mjs`). `npm run dev` is for development. See README.md for the code map and RULES.md for the supported game. Earlier history (built with Codex) is in git; the original checkout is `~/Documents/Codex/2026-08-06/i-d`.
 
 ## Checks
 - `npm run typecheck`, `npm run lint`, `npm run test:unit` after any change. `npm test` adds the production build, the server-render test and the coach benchmark.
 - Rules changes need a test in `tests/engine.test.ts` that conserves chips and pins exact stacks and rake. Use pots below the $3 rake cap, or the cap hides errors.
 
 ## Conventions
+- After any change to `app/`, rebuild with `npm run build:artifact` and republish `dist/artifact/river-room.html` to the existing artifact (same file path, so the URL stays). The artifact's session lives in the viewer's browser storage, so it is separate from the localhost copy.
 - Import from `app/poker-engine.ts` outside the engine. Inside `app/engine/`, keep the layering in that file's header: rules never import the coach or bots.
 - Settlement logic exists in two places: `rules.ts` (`awardUncontested`, `showdown`) and the coach's `terminalRiverEV` in `evaluation.ts`. Change them together.
 - Bots must only see `botView`; the coach must only see `coachView`. No hidden cards, styles or deck.
