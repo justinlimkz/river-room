@@ -638,11 +638,11 @@ const PREFLOP_HABITS: Record<BotProfile, PreflopHabits> = {
   caller: { openWiden: 0, limp: 0.35, defend: 0.45, lightThreeBet: 0 },
 };
 
-/** Styles that stay close to the book open extra hands only from the cutoff and button, where it costs least. */
+/** Styles that stay close to the book. */
 const LATE_POSITION_ONLY = new Set<BotProfile>(["balanced", "tag"]);
 
 /** Hands below this percentile are never played just for style. */
-const STYLE_FLOOR: Record<BotProfile, number> = { balanced: 0.35, tag: 0.45, lag: 0.38, nit: 0.8, caller: 0.3 };
+const STYLE_FLOOR: Record<BotProfile, number> = { balanced: 0.36, tag: 0.48, lag: 0.38, nit: 0.8, caller: 0.3 };
 
 function stylePreflop(state: HandState, seatIndex: number, baseline: PokerAction): PokerAction {
   const player = state.players[seatIndex];
@@ -658,7 +658,8 @@ function stylePreflop(state: HandState, seatIndex: number, baseline: PokerAction
   if (state.raiseCount === 0) {
     if (!bounds.canRaise && !folded) return baseline;
     const inChart = DEEP_OPEN_RANGES[player.position].has(key);
-    const lateEnough = !LATE_POSITION_ONLY.has(player.profile) || ["CO", "BTN", "BTN/SB"].includes(player.position);
+    // Styles close to the book only add hands from the cutoff and button, where position makes it cheap.
+    const lateEnough = !LATE_POSITION_ONLY.has(player.profile) || player.position === "CO" || player.position === "BTN";
     if (baseline.type === "fold" && bounds.canRaise && limpers === 0 && !inChart && lateEnough && strength >= STYLE_FLOOR[player.profile] && mix("widen") < habits.openWiden) {
       return contextualPreflopRaise(state, seatIndex);
     }
@@ -716,8 +717,8 @@ function stylePostflop(state: HandState, seatIndex: number, baseline: PokerActio
     }
     case "nit": {
       // Gives up on a second barrel without a strong hand, and only raises with one.
-      if (facingBet && !strong && calledEarlierStreet && state.street !== "flop" && baseline.type !== "fold" && mix("give-up") < 0.85) return { type: "fold" };
-      if (aggressive && !strong && mix("raise-only-strong") < 0.8) return facingBet ? { type: "call" } : { type: "check" };
+      if (facingBet && !strong && calledEarlierStreet && state.street !== "flop" && baseline.type !== "fold" && mix("give-up") < 0.8) return { type: "fold" };
+      if (aggressive && !strong && mix("raise-only-strong") < 0.6) return facingBet ? { type: "call" } : { type: "check" };
       return baseline;
     }
     case "lag": {

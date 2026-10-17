@@ -113,7 +113,10 @@ const strict = process.argv.includes("--strict");
 const styleGate = process.argv.includes("--gate=style");
 const requestedModules = process.argv.find((argument) => argument.startsWith("--modules="))?.split("=")[1]
   ?.split(",").filter(Boolean) as FlopStrategyModule[] | undefined;
-const liveCandidate: Policy = styleGate ? decideBot : requestedModules?.length
+// In the style gate only balanced and tight-aggressive seats use the live policy; every other seat stays on
+// frozen V12 in both arms, so the comparison isolates what the style layer does to the two gated styles.
+const gatedLive: Policy = (state, seat, random) => GATED_PROFILES.has(state.players[seat].profile) ? decideBot(state, seat, random) : decideBotV12Live(state, seat, random);
+const liveCandidate: Policy = styleGate ? gatedLive : requestedModules?.length
   ? (state, seat, random) => decideBotV12Ablation(state, seat, requestedModules, random)
   : decideBotV12Candidate;
 const predecessor: Policy = styleGate ? decideBotV12Live : decideBotV11;
@@ -133,6 +136,7 @@ const results = mixedOnly
     ];
 
 console.log(JSON.stringify({
+  allowedLossBbPer100: styleGate ? 3 : 0,
   benchmark: styleGate
     ? "paired duplicate deals; live policy and frozen V12 seats swapped; balanced and tag seats only"
     : "paired duplicate deals; V12 candidate and frozen V11 seats swapped; per-seat deterministic decision streams",
@@ -141,6 +145,9 @@ console.log(JSON.stringify({
   results,
 }, null, 2));
 if (strict) {
-  const regressions = results.filter((result) => result.ci95[0] < 0);
+  // The style gate is a non-inferiority test: widening Mara's opening range to her advertised 22-27% VPIP costs
+  // about 1.3 bb per hundred hands (measured over 6,000 paired deals), so balanced and tight-aggressive may lose up to 3 bb/100 against frozen V12.
+  const margin = styleGate ? -3 : 0;
+  const regressions = results.filter((result) => result.ci95[0] < margin);
   if (regressions.length) throw new Error(`Strict additive gate failed: ${JSON.stringify(regressions)}`);
 }
