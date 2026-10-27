@@ -2,8 +2,9 @@
 
 A six-max $1/$2 no-limit hold'em practice table. The main way to play is a private Claude artifact (a single HTML page built from this repo); it also runs locally. You play against five bots that each have a different style, then read a plain-language review of every decision you made. Training chips only; sessions are saved in your browser.
 
-<!-- Screenshot: add docs/table.png and docs/review.png, then embed them here. -->
-![River Room screenshot (placeholder)](docs/table.png)
+![The table on the flop: five bots with their styles listed, your hole cards and the bet controls](docs/table.png)
+
+![The hand review: each decision graded, with a short explanation and the options ranked best first](docs/review.png)
 
 ## Play it
 
